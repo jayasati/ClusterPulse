@@ -88,6 +88,21 @@ class SqlAlchemyAlertRepository:
         row.resolved_at = resolved_at
         return self._commit_and_return(row, alert_id, "failed to resolve alert")
 
+    def acknowledge_alert(
+        self, alert_id: int, acknowledged_by: str, acknowledged_at: datetime
+    ) -> AlertRecord:
+        """Set acknowledgement info on an alert. Idempotent while firing."""
+        row = self._get_or_raise(alert_id, "failed to acknowledge alert")
+        row.acknowledged_by = acknowledged_by
+        row.acknowledged_at = acknowledged_at
+        return self._commit_and_return(row, alert_id, "failed to acknowledge alert")
+
+    def escalate_alert(self, alert_id: int, escalated_at: datetime) -> AlertRecord:
+        """Mark an alert as escalated."""
+        row = self._get_or_raise(alert_id, "failed to escalate alert")
+        row.escalated_at = escalated_at
+        return self._commit_and_return(row, alert_id, "failed to escalate alert")
+
     def get(self, alert_id: int) -> AlertRecord | None:
         """Return the alert with ``alert_id``, or ``None`` if unknown."""
         try:
@@ -150,5 +165,12 @@ def _to_record(row: AlertModel) -> AlertRecord:
         last_fired_at=ensure_utc(row.last_fired_at),
         resolved_at=(
             ensure_utc(row.resolved_at) if row.resolved_at is not None else None
+        ),
+        acknowledged_at=(
+            ensure_utc(row.acknowledged_at) if row.acknowledged_at is not None else None
+        ),
+        acknowledged_by=row.acknowledged_by,
+        escalated_at=(
+            ensure_utc(row.escalated_at) if row.escalated_at is not None else None
         ),
     )

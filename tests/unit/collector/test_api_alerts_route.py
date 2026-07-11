@@ -175,3 +175,87 @@ def test_rule_evaluation_failure_does_not_break_ingestion(
 
     assert response.status_code == 200
     assert response.json()["accepted"] is True
+
+
+def _open_alert_id(collector_client, auth_headers) -> int:
+    now = datetime.now(timezone.utc)
+    collector_client.post(
+        "/api/v1/metrics",
+        json=_metrics_payload("node-1", 95.0, now),
+        headers=auth_headers,
+    )
+    alerts = collector_client.get("/api/v1/alerts", headers=auth_headers).json()
+    return alerts[0]["id"]
+
+
+def test_acknowledge_requires_auth(collector_client) -> None:
+    response = collector_client.post(
+        "/api/v1/alerts/1/acknowledge", json={"acknowledged_by": "alice"}
+    )
+    assert response.status_code == 401
+
+
+def test_acknowledge_firing_alert_succeeds(collector_client, auth_headers) -> None:
+    alert_id = _open_alert_id(collector_client, auth_headers)
+
+    response = collector_client.post(
+        f"/api/v1/alerts/{alert_id}/acknowledge",
+        json={"acknowledged_by": "alice"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["acknowledged_by"] == "alice"
+    assert body["acknowledged_at"] is not None
+    assert body["status"] == "firing"
+
+
+def test_acknowledge_unknown_alert_returns_404(collector_client, auth_headers) -> None:
+    response = collector_client.post(
+        "/api/v1/alerts/999999/acknowledge",
+        json={"acknowledged_by": "alice"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "AlertNotFoundError"
+
+
+def test_acknowledge_resolved_alert_returns_409(collector_client, auth_headers) -> None:
+    now = datetime.now(timezone.utc)
+    collector_client.post(
+        "/api/v1/metrics",
+        json=_metrics_payload("node-1", 95.0, now),
+        headers=auth_headers,
+    )
+    later = now + timedelta(seconds=30)
+    collector_client.post(
+        "/api/v1/metrics",
+        json=_metrics_payload("node-1", 10.0, later),
+        headers=auth_headers,
+    )
+    alert_id = collector_client.get("/api/v1/alerts", headers=auth_headers).json()[0][
+        "id"
+    ]
+
+    response = collector_client.post(
+        f"/api/v1/alerts/{alert_id}/acknowledge",
+        json={"acknowledged_by": "alice"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"] == "AlertAlreadyResolvedError"
+
+
+def test_acknowledge_missing_body_field_returns_422(
+    collector_client, auth_headers
+) -> None:
+    alert_id = _open_alert_id(collector_client, auth_headers)
+
+    response = collector_client.post(
+        f"/api/v1/alerts/{alert_id}/acknowledge", json={}, headers=auth_headers
+    )
+
+    assert response.status_code == 422

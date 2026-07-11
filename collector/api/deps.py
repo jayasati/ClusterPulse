@@ -14,6 +14,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from collector.config import CollectorSettings
+from collector.notifications.protocols import Notifier
 from collector.repositories.alert_repository import SqlAlchemyAlertRepository
 from collector.repositories.metrics_repository import SqlAlchemyMetricsRepository
 from collector.repositories.node_repository import SqlAlchemyNodeRepository
@@ -42,6 +43,13 @@ def get_rules_config(request: Request) -> RulesConfig:
     """Return the ``RulesConfig`` loaded once at app startup."""
     rules_config: RulesConfig = request.app.state.rules_config
     return rules_config
+
+
+def get_notifier(request: Request) -> Notifier | None:
+    """Return the ``Notifier`` constructed once at app startup, or ``None``
+    if Telegram notifications aren't configured (``settings.notifications_enabled``)."""
+    notifier: Notifier | None = request.app.state.notifier
+    return notifier
 
 
 def get_db_session(request: Request) -> Generator[Session, None, None]:
@@ -109,9 +117,16 @@ def get_rule_engine(
 def get_alert_evaluation_service(
     rule_engine: RuleEngine = Depends(get_rule_engine),
     alert_repository: AlertRepository = Depends(get_alert_repository),
+    notifier: Notifier | None = Depends(get_notifier),
+    settings: CollectorSettings = Depends(get_settings),
 ) -> AlertEvaluationService:
     """Provide an ``AlertEvaluationService`` wired to its dependencies."""
-    return AlertEvaluationService(rule_engine, alert_repository)
+    return AlertEvaluationService(
+        rule_engine,
+        alert_repository,
+        notifier=notifier,
+        escalation_after_seconds=settings.escalation_after_seconds,
+    )
 
 
 def get_metrics_ingestion_service(

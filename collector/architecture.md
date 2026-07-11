@@ -3,7 +3,8 @@
 Related: `docs/architecture/00-project-initialization.md` (project-wide design),
 `docs/adr/002-postgresql-choice.md`, `docs/adr/003-heartbeat-deadman-switch.md`,
 `docs/adr/005-authentication.md`, `docs/adr/006-alert-lifecycle.md`,
-`docs/adr/016-database-migration-strategy.md`, `docs/adr/017-collector-sync-vs-async-db.md`.
+`docs/adr/016-database-migration-strategy.md`, `docs/adr/017-collector-sync-vs-async-db.md`,
+`docs/adr/018-telegram-notifications.md`, `docs/adr/019-alert-acknowledgement-escalation.md`.
 
 ## Overview
 
@@ -15,10 +16,13 @@ exposes — routes depend on services via FastAPI `Depends`, services depend on 
 `AgentScheduler` depending on `shared.protocols`, not concrete classes
 (`agent/architecture.md`).
 
-The Rule Engine (`collector/rules/`) is a peer of `repositories/`, not a sub-layer of it —
-both are consumed by `services/`. `collector/enums.py` exists specifically so these two
-peer packages (`rules/` evaluates, `repositories/` persists) can share the `RuleKind` and
-`AlertStatus` vocabulary without either depending on the other.
+The Rule Engine (`collector/rules/`) and Notifications (`collector/notifications/`) are
+peers of `repositories/`, not sub-layers of it — all three are consumed by `services/`.
+`collector/enums.py` exists specifically so `rules/` and `repositories/` (two peers,
+neither of which should depend on the other) can share the `RuleKind`/`AlertStatus`
+vocabulary. `collector/notifications/formatting.py` uses a structural `Protocol`
+(`_AlertLike`) rather than importing `AlertView` from `services/`, for the same reason:
+`services/` calls into `notifications/`, so the reverse import would be circular.
 
 ## Class diagram
 
@@ -30,6 +34,10 @@ classDiagram
         +token_set: frozenset~str~
         +heartbeat_stale_after_seconds: float
         +rules_config_path: str
+        +telegram_bot_token: str
+        +telegram_chat_id: str
+        +notifications_enabled: bool
+        +escalation_after_seconds: float
     }
 
     class NodeRepository { <<Protocol>> }
@@ -46,6 +54,8 @@ classDiagram
         +create_alert(...) AlertRecord
         +update_last_fired(alert_id, ...) AlertRecord
         +resolve_alert(alert_id, resolved_at) AlertRecord
+        +acknowledge_alert(alert_id, by, at) AlertRecord
+        +escalate_alert(alert_id, escalated_at) AlertRecord
         +get(alert_id) AlertRecord
         +list_alerts(status) list~AlertRecord~
     }
@@ -66,6 +76,14 @@ classDiagram
     RuleEngine --> RulesConfig : configured from
     RuleEngine --> MetricsRepository : depends on (Protocol, rate-of-change lookups only)
 
+    class Notifier {
+        <<Protocol>>
+        +notify(message) bool
+    }
+    class TelegramNotifier
+
+    Notifier <|.. TelegramNotifier
+
     class NodeRegistryService {
         +record_seen(node_id, seen_at) NodeView
         +get_node(node_id) NodeView
@@ -74,7 +92,10 @@ classDiagram
     class AlertEvaluationService {
         -rule_engine: RuleEngine
         -alert_repository: AlertRepository
+        -notifier: Notifier
+        -escalation_after_seconds: float
         +evaluate_and_apply(node_id, samples, collected_at) list~AlertView~
+        +acknowledge(alert_id, acknowledged_by) AlertView
         +get_alert(alert_id) AlertView
         +list_alerts(status) list~AlertView~
     }
@@ -88,6 +109,7 @@ classDiagram
     NodeRegistryService --> NodeRepository : depends on (Protocol)
     AlertEvaluationService --> RuleEngine : depends on (concrete)
     AlertEvaluationService --> AlertRepository : depends on (Protocol)
+    AlertEvaluationService --> Notifier : depends on (Protocol, optional)
     MetricsIngestionService --> MetricsRepository : depends on (Protocol)
     MetricsIngestionService --> NodeRegistryService : depends on (concrete)
     MetricsIngestionService --> AlertEvaluationService : depends on (concrete, optional)
@@ -100,6 +122,9 @@ classDiagram
         +first_fired_at: datetime
         +last_fired_at: datetime
         +resolved_at: datetime
+        +acknowledged_at: datetime
+        +acknowledged_by: str
+        +escalated_at: datetime
     }
     SqlAlchemyAlertRepository --> AlertModel : maps
     AlertModel --> NodeModel : FK node_id
@@ -135,8 +160,8 @@ sequenceDiagram
     AlertSvc->>RuleEng: evaluate(node_id, samples, collected_at)
     RuleEng->>MetricsRepo: find_previous_sample(...) [rate-of-change rules only]
     RuleEng-->>AlertSvc: list[RuleEvaluationResult]
-    loop each breached/resolved result
-        AlertSvc->>AlertRepo: find_open_alert / create_alert / update_last_fired / resolve_alert
+    loop each result
+        Note over AlertSvc: apply Alert Lifecycle transition (see next diagram)
     end
     alt rule evaluation raises (any exception)
         AlertSvc-->>Svc: exception
@@ -154,44 +179,84 @@ response as retryable-or-fatal (`docs/adr/011-http-vs-message-queue.md`); a Rule
 bug must never cause the Agent to retry-storm re-delivering metrics that were already
 safely persisted.
 
-## Sequence diagram — Alert Lifecycle state machine
+## Sequence diagram — Alert Lifecycle, escalation, and notification
 
 ```mermaid
 sequenceDiagram
     participant AlertSvc as AlertEvaluationService
     participant AlertRepo as AlertRepository
+    participant Notif as Notifier (Telegram)
 
     AlertSvc->>AlertRepo: find_open_alert(node_id, rule_key)
-    alt result.breached and no open alert
+    alt breached, no open alert
         AlertRepo-->>AlertSvc: None
         AlertSvc->>AlertRepo: create_alert(...) [status=firing]
-    else result.breached and an alert is already open
+        AlertSvc->>Notif: notify(format_opened(alert))
+    else breached, already open
         AlertRepo-->>AlertSvc: AlertRecord
         AlertSvc->>AlertRepo: update_last_fired(alert_id, value, fired_at)
-        Note over AlertSvc: same row — this IS the Phase 3 dedup:<br/>"don't open a duplicate row for an already-firing condition"
-    else not result.breached and an alert is open
+        Note over AlertSvc: same row — Phase 3's row-level dedup
+        alt not acknowledged and not yet escalated and age >= escalation_after_seconds
+            AlertSvc->>AlertRepo: escalate_alert(alert_id, fired_at)
+            AlertSvc->>Notif: notify(format_escalated(alert))
+            Note over AlertSvc: at most once per alert — escalated_at gates re-escalation
+        else no escalation due
+            Note over AlertSvc: no notification — this IS the Phase 4<br/>notification-level dedup
+        end
+    else not breached, an alert is open
         AlertRepo-->>AlertSvc: AlertRecord
         AlertSvc->>AlertRepo: resolve_alert(alert_id, resolved_at)
-    else not result.breached and no open alert
+        AlertSvc->>Notif: notify(format_resolved(alert))
+    else not breached, no open alert
         AlertRepo-->>AlertSvc: None
-        Note over AlertSvc: no-op, nothing to do
+        Note over AlertSvc: no-op
     end
 ```
 
-Two states only: `firing` → `resolved`. No `acknowledged`/`escalated` — those, plus
-*notification-level* dedup ("don't re-notify Telegram every minute for the same
-still-firing alert," a different concern from the row-level dedup above) and
-escalation, are explicitly Phase 4 (`docs/adr/006-alert-lifecycle.md`).
+```mermaid
+sequenceDiagram
+    participant Operator
+    participant Route as alerts.acknowledge_alert
+    participant Svc as AlertEvaluationService
+    participant Repo as AlertRepository
 
-## Why rule evaluation is ingestion-triggered, not scheduled
+    Operator->>Route: POST /api/v1/alerts/{id}/acknowledge {acknowledged_by}
+    Route->>Svc: acknowledge(alert_id, acknowledged_by)
+    Svc->>Repo: get(alert_id)
+    alt alert not found
+        Repo-->>Svc: None
+        Svc-->>Route: raises AlertNotFoundError
+        Route-->>Operator: 404
+    else alert already resolved
+        Repo-->>Svc: AlertRecord (status=resolved)
+        Svc-->>Route: raises AlertAlreadyResolvedError
+        Route-->>Operator: 409
+    else alert firing
+        Repo-->>Svc: AlertRecord (status=firing)
+        Svc->>Repo: acknowledge_alert(alert_id, by, now)
+        Repo-->>Svc: AlertRecord (acknowledged_at set)
+        Svc-->>Route: AlertView
+        Route-->>Operator: 200 AlertRead
+        Note over Svc: subsequent escalation checks for this alert now skip
+    end
+```
 
-No background scheduler runs inside the Collector to periodically re-evaluate rules.
-Evaluation happens synchronously, inline with `POST /api/v1/metrics`, immediately after
-persistence succeeds. This avoids adding a scheduler/async-job dependency
+`AlertStatus` is unchanged (`firing`/`resolved`) — acknowledgement is an **orthogonal**
+attribute (`acknowledged_at`/`acknowledged_by`), not a third status value. An alert can be
+`firing` *and* acknowledged simultaneously; only the rule no longer breaching resolves it.
+See `docs/adr/019-alert-acknowledgement-escalation.md`.
+
+## Why rule evaluation (and escalation) is ingestion-triggered, not scheduled
+
+No background scheduler runs inside the Collector. Rule evaluation happens synchronously,
+inline with `POST /api/v1/metrics`, immediately after persistence succeeds — and the
+escalation check rides along the same path (folded into the "still breaching, advance"
+step). This avoids adding a scheduler/async-job dependency
 (`docs/adr/017-collector-sync-vs-async-db.md`'s "no complexity without a demonstrated
-need" philosophy applies here too) at the cost of never re-evaluating a node that has
-gone completely silent — that's a *staleness* alert, a different, still-unimplemented
-concern (see Future Extension Notes).
+need" philosophy applies here too), at the cost of two related, still-open gaps: a node
+that goes completely silent is never re-evaluated (no staleness *alerting*, though
+`is_stale` is computed), and a firing alert on a silent node never escalates either — both
+require the same not-yet-built scheduler (see Future Extension Notes).
 
 ## Why rules are a JSON config file, not a database
 
@@ -199,6 +264,16 @@ concern (see Future Extension Notes).
 API. A file, loaded once at startup (`collector/rules/loader.py`, stdlib `json`, zero new
 dependency), fails Collector startup fast (`ConfigurationError`) on malformed content or
 a duplicate rule for the same `(metric_type, kind)`. See `docs/adr/006-alert-lifecycle.md`.
+
+## Why Telegram delivery is fire-and-forget, not retried
+
+`TelegramNotifier.notify()` makes a single attempt and never raises — any failure
+(network error, non-2xx response) is caught and logged internally. The alert's state is
+already durably persisted in Postgres *before* any notification is attempted
+(`create_alert`/`escalate_alert`/`resolve_alert` all happen first), so a Telegram outage
+only costs the notice, never the alert record itself. No retry-with-backoff (unlike the
+Agent's `HttpTransport`) since there's nothing to protect by retrying — the durable state
+was never at risk. See `docs/adr/018-telegram-notifications.md`.
 
 ## Why sync SQLAlchemy (not async)
 
@@ -211,10 +286,24 @@ justified yet. See `docs/adr/017-collector-sync-vs-async-db.md`.
 ## Why Alembic, not `create_all()`
 
 `Base.metadata.create_all()` has no history, no rollback path, and no story for applying
-incremental schema changes to a running production database. Both migrations
-(`0001_initial_schema.py`, `0002_alerts_table.py`) are hand-written, not autogenerated,
-verified via generated offline SQL (`alembic upgrade head --sql`) rather than a live
-database — see `docs/adr/016-database-migration-strategy.md`.
+incremental schema changes to a running production database. All three migrations
+(`0001_initial_schema.py`, `0002_alerts_table.py`, `0003_alert_acknowledgement_escalation.py`)
+are hand-written, not autogenerated. Originally verified only via generated offline SQL
+(`alembic upgrade head --sql`); later applied for real against a live PostgreSQL 16
+container, with the Collector run against it end-to-end — see
+`docs/adr/016-database-migration-strategy.md`'s "Update" section.
+
+## Why `collector/db/enum_column.py` exists
+
+Every `(str, Enum)`-typed column (`metric_type`, `rule_kind`, `severity`, `status`) is
+built via `str_enum_column()`, not a bare `sqlalchemy.Enum(...)`. SQLAlchemy's default
+stores an enum member's `.name` (e.g. `"CPU_USAGE_PERCENT"`); every migration's hand-written
+Postgres enum type uses `.value` (e.g. `"cpu.usage_percent"`). Live verification against a
+real Postgres (see above) found this exact mismatch failing every metric/alert insert with
+`invalid input value for enum` — invisible against SQLite, whose test-only
+`create_all()`-generated CHECK constraint derives from the same wrong default and was
+therefore self-consistently wrong. `test_db_enum_column.py` regression-tests the *raw
+stored value* specifically so this can't silently return.
 
 ## Known limitation: shared-token auth doesn't bind identity
 
@@ -232,15 +321,22 @@ firing. Simplest correct behavior for "Alert Lifecycle" as literally named in
 `ROADMAP.md` Phase 3; revisit if this becomes a real operational nuisance
 (`docs/adr/006-alert-lifecycle.md`).
 
+## Known limitation: escalation and acknowledgement have no real identity
+
+`acknowledged_by` is a free-text, self-reported string — the shared-token auth model
+(`docs/adr/005-authentication.md`) has no per-user identity to verify it against. Same
+root cause as the identity-spoofing limitation above; solved together once per-node/
+per-user credentials exist.
+
 ## Future Extension Notes
 
-- **Per-node credentials**: replace the shared-token model once TLS/RBAC land, closing
-  the identity-spoofing gap above.
+- **Per-node/per-user credentials**: replace the shared-token model once TLS/RBAC land,
+  closing both the identity-spoofing gap and the unverified-`acknowledged_by` gap above.
 - **Async DB access**: revisit if profiling shows threadpool contention under real load.
-- **Alerting on staleness**: still not implemented. `NodeRegistryService.list_nodes()`
-  exposes `is_stale` today, but nothing polls it — that requires a scheduler, which this
-  phase deliberately did not add. A future phase adding *any* Collector-side background
-  job should reconsider this at the same time.
+- **A real scheduler**: would unlock staleness-based *alerting* (not just the existing
+  `is_stale` field) and staleness-based *escalation* (a silent node's firing alert
+  currently never escalates) — worth solving together, since both need the same
+  Collector-side background job this project has deliberately avoided so far.
 - **Dynamic rule management**: a database-backed rule CRUD API (with hot-reload) is the
   natural successor to the static JSON config, if per-fleet/per-tenant customization
   becomes a real need.
@@ -249,7 +345,10 @@ firing. Simplest correct behavior for "Alert Lifecycle" as literally named in
 - **Label-scoped rules**: rules currently apply per `metric_type` globally, not per label
   (e.g., a disk rule can't target one mount point specifically) — matches the Agent's
   current single-mount-point `DiskCollector`, so not a real functionality gap yet.
-- **Telegram delivery, acknowledgement, escalation, notification-level dedup**: Phase 4,
-  building on the `firing`/`resolved` alerts this phase produces.
+- **Multi-tier escalation**: currently a single tier (escalate once). A ladder (e.g. 15m →
+  1h → 4h, possibly to different chats/channels) is a natural extension once needed.
+- **Additional notification channels**: `Notifier` is already a Protocol — a second
+  implementation (email, Slack, PagerDuty) is additive, not a redesign.
 - **Rate limiting**: not implemented; noted as a gap if the Collector is ever exposed
-  beyond a trusted network.
+  beyond a trusted network, or if a fleet-wide incident opens enough alerts at once to
+  approach Telegram's per-chat rate limits.

@@ -49,6 +49,9 @@ class AlertRead(BaseModel):
     first_fired_at: datetime
     last_fired_at: datetime
     resolved_at: datetime | None
+    acknowledged_at: datetime | None
+    acknowledged_by: str | None
+    escalated_at: datetime | None
 
     @classmethod
     def from_view(cls, view: AlertView) -> "AlertRead":
@@ -66,4 +69,13 @@ class AlertRead(BaseModel):
             first_fired_at=view.first_fired_at,
             last_fired_at=view.last_fired_at,
             resolved_at=view.resolved_at,
+            acknowledged_at=view.acknowledged_at,
+            acknowledged_by=view.acknowledged_by,
+            escalated_at=view.escalated_at,
         )
+
+
+class AcknowledgeRequest(BaseModel):
+    """Request body for ``POST /api/v1/alerts/{id}/acknowledge``."""
+
+    acknowledged_by: str

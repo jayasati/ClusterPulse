@@ -9,7 +9,11 @@ import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
-from collector.exceptions import AlertNotFoundError, NodeNotFoundError
+from collector.exceptions import (
+    AlertAlreadyResolvedError,
+    AlertNotFoundError,
+    NodeNotFoundError,
+)
 from shared.constants import HTTP_SERVER_ERROR_THRESHOLD
 from shared.exceptions import AuthenticationError, ClusterPulseError, PersistenceError
 
@@ -22,6 +26,8 @@ def _status_for(exc: ClusterPulseError) -> int:
         return status.HTTP_401_UNAUTHORIZED
     if isinstance(exc, (NodeNotFoundError, AlertNotFoundError)):
         return status.HTTP_404_NOT_FOUND
+    if isinstance(exc, AlertAlreadyResolvedError):
+        return status.HTTP_409_CONFLICT
     if isinstance(exc, PersistenceError):
         return status.HTTP_503_SERVICE_UNAVAILABLE
     return status.HTTP_500_INTERNAL_SERVER_ERROR

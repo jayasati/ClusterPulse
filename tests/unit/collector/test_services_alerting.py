@@ -1,11 +1,11 @@
 """Unit tests for AlertEvaluationService, using fakes for RuleEngine/AlertRepository."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from collector.enums import AlertStatus, RuleKind
-from collector.exceptions import AlertNotFoundError
+from collector.exceptions import AlertAlreadyResolvedError, AlertNotFoundError
 from collector.repositories.protocols import AlertRecord
 from collector.rules.engine import RuleEvaluationResult
 from collector.services.alerting import AlertEvaluationService
@@ -92,6 +92,24 @@ class _FakeAlertRepository:
         self._alerts[alert_id] = updated
         return updated
 
+    def acknowledge_alert(self, alert_id, acknowledged_by, acknowledged_at):
+        record = self._alerts[alert_id]
+        updated = AlertRecord(
+            **{
+                **record.__dict__,
+                "acknowledged_by": acknowledged_by,
+                "acknowledged_at": acknowledged_at,
+            }
+        )
+        self._alerts[alert_id] = updated
+        return updated
+
+    def escalate_alert(self, alert_id, escalated_at):
+        record = self._alerts[alert_id]
+        updated = AlertRecord(**{**record.__dict__, "escalated_at": escalated_at})
+        self._alerts[alert_id] = updated
+        return updated
+
     def get(self, alert_id):
         return self._alerts.get(alert_id)
 
@@ -100,6 +118,15 @@ class _FakeAlertRepository:
         if status is None:
             return values
         return [a for a in values if a.status == status]
+
+
+class _FakeNotifier:
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def notify(self, message: str) -> bool:
+        self.messages.append(message)
+        return True
 
 
 def _result(
@@ -189,3 +216,174 @@ def test_list_alerts_filters_by_status() -> None:
     assert len(service.list_alerts()) == 2
     assert len(service.list_alerts(status=AlertStatus.FIRING)) == 2
     assert len(service.list_alerts(status=AlertStatus.RESOLVED)) == 0
+
+
+# --- Acknowledgement ---------------------------------------------------
+
+
+def test_acknowledge_sets_who_and_when() -> None:
+    alert_repo = _FakeAlertRepository()
+    service = AlertEvaluationService(_FakeRuleEngine([_result(True)]), alert_repo)
+    service.evaluate_and_apply("node-1", [], _now())
+
+    view = service.acknowledge(1, acknowledged_by="alice")
+
+    assert view.acknowledged_by == "alice"
+    assert view.acknowledged_at is not None
+    assert view.status == AlertStatus.FIRING
+
+
+def test_acknowledge_unknown_alert_raises_not_found() -> None:
+    service = AlertEvaluationService(_FakeRuleEngine([]), _FakeAlertRepository())
+
+    with pytest.raises(AlertNotFoundError):
+        service.acknowledge(999, acknowledged_by="alice")
+
+
+def test_acknowledge_resolved_alert_raises_already_resolved() -> None:
+    alert_repo = _FakeAlertRepository()
+    rule_engine = _FakeRuleEngine([_result(True)])
+    service = AlertEvaluationService(rule_engine, alert_repo)
+    service.evaluate_and_apply("node-1", [], _now())
+    rule_engine._results = [_result(False)]
+    service.evaluate_and_apply("node-1", [], _now())
+
+    with pytest.raises(AlertAlreadyResolvedError):
+        service.acknowledge(1, acknowledged_by="alice")
+
+
+def test_acknowledge_is_overwritable() -> None:
+    alert_repo = _FakeAlertRepository()
+    service = AlertEvaluationService(_FakeRuleEngine([_result(True)]), alert_repo)
+    service.evaluate_and_apply("node-1", [], _now())
+    service.acknowledge(1, acknowledged_by="alice")
+
+    view = service.acknowledge(1, acknowledged_by="bob")
+
+    assert view.acknowledged_by == "bob"
+
+
+# --- Notifications (dedup: only on open/escalate/resolve) --------------
+
+
+def test_notifier_called_on_open() -> None:
+    notifier = _FakeNotifier()
+    service = AlertEvaluationService(
+        _FakeRuleEngine([_result(True)]), _FakeAlertRepository(), notifier=notifier
+    )
+
+    service.evaluate_and_apply("node-1", [], _now())
+
+    assert len(notifier.messages) == 1
+    assert "#1" in notifier.messages[0]
+
+
+def test_notifier_not_called_again_on_continued_breach() -> None:
+    notifier = _FakeNotifier()
+    service = AlertEvaluationService(
+        _FakeRuleEngine([_result(True)]), _FakeAlertRepository(), notifier=notifier
+    )
+    service.evaluate_and_apply("node-1", [], _now())
+
+    service.evaluate_and_apply("node-1", [], _now())
+
+    assert len(notifier.messages) == 1
+
+
+def test_notifier_called_on_resolve() -> None:
+    notifier = _FakeNotifier()
+    rule_engine = _FakeRuleEngine([_result(True)])
+    service = AlertEvaluationService(
+        rule_engine, _FakeAlertRepository(), notifier=notifier
+    )
+    service.evaluate_and_apply("node-1", [], _now())
+
+    rule_engine._results = [_result(False)]
+    service.evaluate_and_apply("node-1", [], _now())
+
+    assert len(notifier.messages) == 2
+    assert "RESOLVED" in notifier.messages[1]
+
+
+def test_works_without_a_notifier() -> None:
+    """Backward compatible: notifier defaults to None."""
+    service = AlertEvaluationService(
+        _FakeRuleEngine([_result(True)]), _FakeAlertRepository()
+    )
+
+    transitions = service.evaluate_and_apply("node-1", [], _now())  # must not raise
+
+    assert len(transitions) == 1
+
+
+# --- Escalation ----------------------------------------------------------
+
+
+def test_escalation_triggers_after_threshold_and_notifies() -> None:
+    notifier = _FakeNotifier()
+    service = AlertEvaluationService(
+        _FakeRuleEngine([_result(True)]),
+        _FakeAlertRepository(),
+        notifier=notifier,
+        escalation_after_seconds=60,
+    )
+    start = _now()
+    service.evaluate_and_apply("node-1", [], start)
+
+    later = start + timedelta(seconds=61)
+    view = service.evaluate_and_apply("node-1", [], later)[0]
+
+    assert view.escalated_at is not None
+    assert len(notifier.messages) == 2
+    assert "ESCALATED" in notifier.messages[1]
+
+
+def test_escalation_does_not_trigger_before_threshold() -> None:
+    notifier = _FakeNotifier()
+    service = AlertEvaluationService(
+        _FakeRuleEngine([_result(True)]),
+        _FakeAlertRepository(),
+        notifier=notifier,
+        escalation_after_seconds=600,
+    )
+    start = _now()
+    service.evaluate_and_apply("node-1", [], start)
+
+    soon = start + timedelta(seconds=10)
+    view = service.evaluate_and_apply("node-1", [], soon)[0]
+
+    assert view.escalated_at is None
+    assert len(notifier.messages) == 1
+
+
+def test_escalation_skipped_when_acknowledged() -> None:
+    service = AlertEvaluationService(
+        _FakeRuleEngine([_result(True)]),
+        _FakeAlertRepository(),
+        escalation_after_seconds=60,
+    )
+    start = _now()
+    service.evaluate_and_apply("node-1", [], start)
+    service.acknowledge(1, acknowledged_by="alice")
+
+    later = start + timedelta(seconds=61)
+    view = service.evaluate_and_apply("node-1", [], later)[0]
+
+    assert view.escalated_at is None
+
+
+def test_escalation_happens_only_once() -> None:
+    service = AlertEvaluationService(
+        _FakeRuleEngine([_result(True)]),
+        _FakeAlertRepository(),
+        escalation_after_seconds=60,
+    )
+    start = _now()
+    service.evaluate_and_apply("node-1", [], start)
+    first_escalation = start + timedelta(seconds=61)
+    first_view = service.evaluate_and_apply("node-1", [], first_escalation)[0]
+
+    much_later = start + timedelta(seconds=1000)
+    second_view = service.evaluate_and_apply("node-1", [], much_later)[0]
+
+    assert first_view.escalated_at == second_view.escalated_at

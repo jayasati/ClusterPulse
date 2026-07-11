@@ -48,16 +48,37 @@ against the ORM model definitions.
 - Every future schema change is a new migration file, reviewed like any other code
   change — more process than `create_all()`, but the correct amount for a system
   `.claude/CLAUDE.md` explicitly wants to resemble production software.
-- The initial migration was never applied against a real PostgreSQL instance in this
-  environment — only verified via its generated offline SQL and via the SQLAlchemy ORM
-  models it mirrors (exercised extensively through the SQLite-backed test suite). This is
-  a real, stated gap: applying `alembic upgrade head` against an actual PostgreSQL
-  instance before production use is an outstanding verification step, not something this
-  phase can claim to have done.
 - `collector/db/migrations/env.py` reads its database URL from `CollectorSettings`
   (i.e., from the same environment variables the running app uses) rather than a
   hardcoded value in `alembic.ini` — one source of truth for "where is the database,"
   avoiding drift between what the app connects to and what migrations are applied against.
+
+## Update: verified against real PostgreSQL (post-Phase-4)
+
+All three migrations (`0001`, `0002`, `0003`) were later applied for the first time
+against a real PostgreSQL 16 container (`alembic upgrade head` — not just `--sql`), and
+the Collector was run against it end-to-end (ingestion, rule evaluation, alert
+open/resolve/acknowledge, all confirmed via direct `psql` inspection). This closed the gap
+this ADR originally flagged: "verified the migration is well-formed" now also means
+"verified it applies cleanly to a real database and the app works against it."
+
+That verification **found a real, previously-hidden bug**: SQLAlchemy's `Enum(SomeEnumClass)`
+column type defaults to storing each member's `.name` (e.g. `"CPU_USAGE_PERCENT"`), not
+its `.value` (e.g. `"cpu.usage_percent"`) — but every migration's hand-written
+`sa.Enum(*_VALUES, name=...)` defines the Postgres enum type's labels from `.value`. Every
+enum-typed column (`metric_type`, `rule_kind`, `severity`, `status`) had this mismatch.
+It never surfaced against SQLite because `Base.metadata.create_all()` (used only by the
+test suite, never production) derives its own CHECK constraint from the same
+(equally-wrong) default — self-consistent, and therefore invisible, until compared
+against the independently-authored migration DDL that a real Postgres actually enforces.
+Fixed via `collector/db/enum_column.py`'s `str_enum_column()` helper
+(`values_callable` set to extract `.value`), applied to all four columns, with a
+regression test (`tests/unit/collector/test_db_enum_column.py`) that asserts against the
+*raw stored text* so this specific regression can't hide behind SQLite again.
+
+This is the clearest demonstration yet of this ADR's own "Interview Talking Points"
+distinction between "verified well-formed" and "verified against a real database" — the
+former genuinely did not catch this, and only the latter did.
 
 ## Interview Talking Points
 

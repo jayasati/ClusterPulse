@@ -90,7 +90,12 @@ class MetricsRepository(Protocol):
 
 @dataclass(frozen=True)
 class AlertRecord:
-    """A persisted alert, decoupled from the ORM model that stores it."""
+    """A persisted alert, decoupled from the ORM model that stores it.
+
+    ``acknowledged_at``/``acknowledged_by``/``escalated_at`` default to
+    ``None`` so existing Phase 3 construction call sites (which predate
+    acknowledgement/escalation) keep working unmodified.
+    """
 
     id: int
     node_id: str
@@ -104,6 +109,9 @@ class AlertRecord:
     first_fired_at: datetime
     last_fired_at: datetime
     resolved_at: datetime | None
+    acknowledged_at: datetime | None = None
+    acknowledged_by: str | None = None
+    escalated_at: datetime | None = None
 
 
 class AlertRepository(Protocol):
@@ -135,6 +143,16 @@ class AlertRepository(Protocol):
 
     def resolve_alert(self, alert_id: int, resolved_at: datetime) -> AlertRecord:
         """Transition an alert from ``firing`` to ``resolved``."""
+        ...
+
+    def acknowledge_alert(
+        self, alert_id: int, acknowledged_by: str, acknowledged_at: datetime
+    ) -> AlertRecord:
+        """Set acknowledgement info on an alert. Idempotent while firing."""
+        ...
+
+    def escalate_alert(self, alert_id: int, escalated_at: datetime) -> AlertRecord:
+        """Mark an alert as escalated. Callers ensure this happens at most once."""
         ...
 
     def get(self, alert_id: int) -> AlertRecord | None:

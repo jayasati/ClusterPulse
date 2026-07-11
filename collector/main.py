@@ -7,10 +7,24 @@ from collector.api.error_handlers import register_exception_handlers
 from collector.api.routes import alerts, health, heartbeat, metrics, nodes
 from collector.config import CollectorSettings
 from collector.db.session import create_session_factory
+from collector.notifications.protocols import Notifier
+from collector.notifications.telegram import TelegramNotifier
 from collector.rules.loader import load_rules_config
 from shared.logging.setup import configure_logging
 
 logger = structlog.get_logger(__name__)
+
+
+def _build_notifier(settings: CollectorSettings) -> Notifier | None:
+    """Build the Telegram notifier, or ``None`` if not configured.
+
+    Constructed once at startup (like the DB engine) rather than per
+    request, so it reuses one HTTP connection pool.
+    """
+    bot_token, chat_id = settings.telegram_bot_token, settings.telegram_chat_id
+    if not bot_token or not chat_id:
+        return None
+    return TelegramNotifier(bot_token, chat_id)
 
 
 def create_app(settings: CollectorSettings | None = None) -> FastAPI:
@@ -27,6 +41,7 @@ def create_app(settings: CollectorSettings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.session_factory = create_session_factory(settings.database_url)
     app.state.rules_config = load_rules_config(settings.rules_config_path)
+    app.state.notifier = _build_notifier(settings)
 
     register_exception_handlers(app)
     app.include_router(metrics.router)

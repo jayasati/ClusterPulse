@@ -14,3 +14,7 @@ class NodeNotFoundError(ClusterPulseError):
 
 class AlertNotFoundError(ClusterPulseError):
     """Raised when a requested alert does not exist."""
+
+
+class AlertAlreadyResolvedError(ClusterPulseError):
+    """Raised when acknowledgement is attempted on a resolved alert."""

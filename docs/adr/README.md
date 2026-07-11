@@ -57,8 +57,10 @@ Every ADR follows the same structure (see [`000-template.md`](000-template.md)):
 | [015](015-testing-strategy.md) | Testing strategy | Proposed |
 | [016](016-database-migration-strategy.md) | Database migration strategy | Accepted |
 | [017](017-collector-sync-vs-async-db.md) | Collector sync vs. async DB access | Accepted |
+| [018](018-telegram-notifications.md) | Telegram notifications | Accepted |
+| [019](019-alert-acknowledgement-escalation.md) | Alert acknowledgement and escalation | Accepted |
 
-ADRs 016+ were added during Phase 2 for decisions that didn't map to a Phase-0-reserved
+ADRs 016+ were added during Phase 2+ for decisions that didn't map to a Phase-0-reserved
 slot — the reserved numbering (000-015) covers what was foreseeable at Phase 0; new
 numbers are appended as later phases surface decisions that weren't anticipated in advance.
 

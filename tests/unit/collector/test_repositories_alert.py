@@ -124,6 +124,111 @@ def test_records_are_timezone_aware_even_from_sqlite(db_session) -> None:
     assert fetched.last_fired_at.tzinfo is not None
 
 
+def test_new_alert_has_no_acknowledgement_or_escalation(db_session) -> None:
+    _ensure_node(db_session)
+    repo = SqlAlchemyAlertRepository(db_session)
+
+    record = _create(repo)
+
+    assert record.acknowledged_at is None
+    assert record.acknowledged_by is None
+    assert record.escalated_at is None
+
+
+def test_acknowledge_alert_sets_who_and_when(db_session) -> None:
+    _ensure_node(db_session)
+    repo = SqlAlchemyAlertRepository(db_session)
+    created = _create(repo)
+    acked_at = _now()
+
+    acked = repo.acknowledge_alert(
+        created.id, acknowledged_by="alice", acknowledged_at=acked_at
+    )
+
+    assert acked.acknowledged_by == "alice"
+    assert acked.acknowledged_at == acked_at
+    assert acked.status == AlertStatus.FIRING  # ack doesn't change status
+
+
+def test_acknowledge_alert_is_overwritable(db_session) -> None:
+    _ensure_node(db_session)
+    repo = SqlAlchemyAlertRepository(db_session)
+    created = _create(repo)
+    repo.acknowledge_alert(created.id, acknowledged_by="alice", acknowledged_at=_now())
+
+    later = _now()
+    reacked = repo.acknowledge_alert(
+        created.id, acknowledged_by="bob", acknowledged_at=later
+    )
+
+    assert reacked.acknowledged_by == "bob"
+    assert reacked.acknowledged_at == later
+
+
+def test_acknowledge_alert_raises_when_alert_missing(db_session) -> None:
+    repo = SqlAlchemyAlertRepository(db_session)
+
+    with pytest.raises(PersistenceError):
+        repo.acknowledge_alert(999, acknowledged_by="alice", acknowledged_at=_now())
+
+
+def test_escalate_alert_sets_escalated_at(db_session) -> None:
+    _ensure_node(db_session)
+    repo = SqlAlchemyAlertRepository(db_session)
+    created = _create(repo)
+    escalated_at = _now()
+
+    escalated = repo.escalate_alert(created.id, escalated_at=escalated_at)
+
+    assert escalated.escalated_at == escalated_at
+    assert escalated.status == AlertStatus.FIRING  # escalation doesn't change status
+
+
+def test_escalate_alert_raises_when_alert_missing(db_session) -> None:
+    repo = SqlAlchemyAlertRepository(db_session)
+
+    with pytest.raises(PersistenceError):
+        repo.escalate_alert(999, escalated_at=_now())
+
+
+def test_acknowledge_alert_wraps_session_get_error(db_session, monkeypatch) -> None:
+    repo = SqlAlchemyAlertRepository(db_session)
+    monkeypatch.setattr(
+        db_session,
+        "get",
+        lambda *a, **k: (_ for _ in ()).throw(SQLAlchemyError("boom")),
+    )
+
+    with pytest.raises(PersistenceError):
+        repo.acknowledge_alert(1, acknowledged_by="alice", acknowledged_at=_now())
+
+
+def test_acknowledge_alert_wraps_commit_error(db_session, monkeypatch) -> None:
+    _ensure_node(db_session)
+    repo = SqlAlchemyAlertRepository(db_session)
+    created = _create(repo)
+    monkeypatch.setattr(
+        db_session, "commit", lambda: (_ for _ in ()).throw(SQLAlchemyError("boom"))
+    )
+
+    with pytest.raises(PersistenceError):
+        repo.acknowledge_alert(
+            created.id, acknowledged_by="alice", acknowledged_at=_now()
+        )
+
+
+def test_escalate_alert_wraps_commit_error(db_session, monkeypatch) -> None:
+    _ensure_node(db_session)
+    repo = SqlAlchemyAlertRepository(db_session)
+    created = _create(repo)
+    monkeypatch.setattr(
+        db_session, "commit", lambda: (_ for _ in ()).throw(SQLAlchemyError("boom"))
+    )
+
+    with pytest.raises(PersistenceError):
+        repo.escalate_alert(created.id, escalated_at=_now())
+
+
 def test_create_alert_wraps_db_errors_as_persistence_error(
     db_session, monkeypatch
 ) -> None:

@@ -1,9 +1,9 @@
-"""Alert read endpoints."""
+"""Alert read and acknowledgement endpoints."""
 
 from fastapi import APIRouter, Depends
 
 from collector.api.deps import get_alert_evaluation_service, verify_api_token
-from collector.api.schemas import AlertRead
+from collector.api.schemas import AcknowledgeRequest, AlertRead
 from collector.enums import AlertStatus
 from collector.services.alerting import AlertEvaluationService
 
@@ -26,3 +26,13 @@ def get_alert(
 ) -> AlertRead:
     """Get a single alert (404 if it doesn't exist)."""
     return AlertRead.from_view(service.get_alert(alert_id))
+
+
+@router.post("/api/v1/alerts/{alert_id}/acknowledge", response_model=AlertRead)
+def acknowledge_alert(
+    alert_id: int,
+    body: AcknowledgeRequest,
+    service: AlertEvaluationService = Depends(get_alert_evaluation_service),
+) -> AlertRead:
+    """Acknowledge a firing alert (404 if unknown, 409 if already resolved)."""
+    return AlertRead.from_view(service.acknowledge(alert_id, body.acknowledged_by))
