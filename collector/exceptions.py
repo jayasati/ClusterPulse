@@ -10,3 +10,7 @@ from shared.exceptions import ClusterPulseError
 
 class NodeNotFoundError(ClusterPulseError):
     """Raised when a requested node is not present in the registry."""
+
+
+class AlertNotFoundError(ClusterPulseError):
+    """Raised when a requested alert does not exist."""

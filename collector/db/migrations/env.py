@@ -13,6 +13,7 @@ from sqlalchemy import engine_from_config, pool
 
 from collector.config import CollectorSettings
 from collector.db.base import Base
+from collector.db.models import alert  # noqa: F401 - registers model on Base
 from collector.db.models import metric_sample  # noqa: F401 - registers model on Base
 from collector.db.models import node  # noqa: F401 - registers model on Base
 

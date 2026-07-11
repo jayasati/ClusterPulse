@@ -1,12 +1,13 @@
 """SQLAlchemy-backed ``NodeRepository`` implementation."""
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from collector.db.models.node import NodeModel
+from collector.db.timeutil import ensure_utc
 from collector.repositories.protocols import NodeRecord
 from shared.exceptions import PersistenceError
 
@@ -63,17 +64,6 @@ class SqlAlchemyNodeRepository:
 def _to_record(node: NodeModel) -> NodeRecord:
     return NodeRecord(
         node_id=node.node_id,
-        first_seen_at=_ensure_utc(node.first_seen_at),
-        last_seen_at=_ensure_utc(node.last_seen_at),
+        first_seen_at=ensure_utc(node.first_seen_at),
+        last_seen_at=ensure_utc(node.last_seen_at),
     )
-
-
-def _ensure_utc(value: datetime) -> datetime:
-    """Normalize a naive datetime to UTC-aware.
-
-    SQLite (used in tests) does not reliably round-trip timezone-aware
-    ``DateTime`` columns and can hand back a naive value even though only
-    UTC-aware values are ever written. PostgreSQL preserves tzinfo
-    correctly, so this is a no-op there.
-    """
-    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)

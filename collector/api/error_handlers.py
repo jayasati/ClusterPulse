@@ -9,7 +9,7 @@ import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
-from collector.exceptions import NodeNotFoundError
+from collector.exceptions import AlertNotFoundError, NodeNotFoundError
 from shared.constants import HTTP_SERVER_ERROR_THRESHOLD
 from shared.exceptions import AuthenticationError, ClusterPulseError, PersistenceError
 
@@ -20,7 +20,7 @@ def _status_for(exc: ClusterPulseError) -> int:
     """Map an exception instance to its HTTP status code, by hierarchy."""
     if isinstance(exc, AuthenticationError):
         return status.HTTP_401_UNAUTHORIZED
-    if isinstance(exc, NodeNotFoundError):
+    if isinstance(exc, (NodeNotFoundError, AlertNotFoundError)):
         return status.HTTP_404_NOT_FOUND
     if isinstance(exc, PersistenceError):
         return status.HTTP_503_SERVICE_UNAVAILABLE

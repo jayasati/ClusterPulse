@@ -1,11 +1,17 @@
 """Collector process configuration."""
 
+from pathlib import Path
+
 from pydantic import model_validator
 from pydantic_settings import SettingsConfigDict
 
 from shared.config.base import BaseServiceSettings
 from shared.constants import DEFAULT_HEARTBEAT_STALE_AFTER_SECONDS
 from shared.exceptions import ConfigurationError
+
+_DEFAULT_RULES_CONFIG_PATH = str(
+    Path(__file__).resolve().parent / "rules" / "default_rules.json"
+)
 
 
 class CollectorSettings(BaseServiceSettings):
@@ -32,6 +38,10 @@ class CollectorSettings(BaseServiceSettings):
     """Comma-separated bearer tokens, e.g. ``token-a,token-b``. See ``token_set``."""
 
     heartbeat_stale_after_seconds: float = DEFAULT_HEARTBEAT_STALE_AFTER_SECONDS
+
+    rules_config_path: str = _DEFAULT_RULES_CONFIG_PATH
+    """Path to the JSON file defining Threshold/Rate-of-change rules. See
+    ``collector/rules/default_rules.json`` and ``docs/adr/006-alert-lifecycle.md``."""
 
     @property
     def token_set(self) -> frozenset[str]:

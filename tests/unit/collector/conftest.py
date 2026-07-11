@@ -20,6 +20,7 @@ from sqlalchemy.pool import StaticPool
 
 from collector.config import CollectorSettings
 from collector.db.base import Base
+from collector.db.models import alert  # noqa: F401 - register model on Base
 from collector.db.models import metric_sample  # noqa: F401 - register model on Base
 from collector.db.models import node  # noqa: F401 - register model on Base
 from collector.main import create_app

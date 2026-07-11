@@ -100,3 +100,80 @@ def test_ingest_uses_payload_collected_at_for_both_repositories() -> None:
 
     assert captured["node_seen_at"] == payload.collected_at
     assert captured["metrics_collected_at"] == payload.collected_at
+
+
+class _NodeRepo:
+    def upsert_seen(self, node_id, seen_at):
+        return NodeRecord(node_id=node_id, first_seen_at=seen_at, last_seen_at=seen_at)
+
+    def get(self, node_id):
+        return None
+
+    def list_all(self):
+        return []
+
+
+class _MetricsRepo:
+    def bulk_insert(self, node_id, samples, collected_at, received_at):
+        pass
+
+
+def test_ingest_invokes_alert_evaluation_when_provided() -> None:
+    calls = []
+
+    class _FakeAlertEvaluation:
+        def evaluate_and_apply(self, node_id, samples, collected_at):
+            calls.append((node_id, samples, collected_at))
+            return []
+
+    service = MetricsIngestionService(
+        _MetricsRepo(), NodeRegistryService(_NodeRepo()), _FakeAlertEvaluation()
+    )
+    payload = _payload()
+
+    ack = service.ingest(payload)
+
+    assert ack.accepted is True
+    assert calls == [(payload.node_id, payload.samples, payload.collected_at)]
+
+
+def test_ingest_works_without_alert_evaluation_collaborator() -> None:
+    """Backward compatibility: the collaborator is optional."""
+    service = MetricsIngestionService(_MetricsRepo(), NodeRegistryService(_NodeRepo()))
+
+    ack = service.ingest(_payload())
+
+    assert ack.accepted is True
+
+
+def test_alert_evaluation_failure_is_logged_and_does_not_fail_ingestion() -> None:
+    from shared.exceptions import PersistenceError
+
+    class _FailingAlertEvaluation:
+        def evaluate_and_apply(self, node_id, samples, collected_at):
+            raise PersistenceError("db exploded")
+
+    service = MetricsIngestionService(
+        _MetricsRepo(), NodeRegistryService(_NodeRepo()), _FailingAlertEvaluation()
+    )
+
+    ack = service.ingest(_payload())  # must not raise
+
+    assert ack.accepted is True
+
+
+def test_alert_evaluation_unexpected_exception_does_not_fail_ingestion() -> None:
+    """Not just ClusterPulseError — a genuine Rule Engine bug (AttributeError,
+    TypeError, etc.) must not fail ingestion either."""
+
+    class _BuggyAlertEvaluation:
+        def evaluate_and_apply(self, node_id, samples, collected_at):
+            raise RuntimeError("unexpected bug")
+
+    service = MetricsIngestionService(
+        _MetricsRepo(), NodeRegistryService(_NodeRepo()), _BuggyAlertEvaluation()
+    )
+
+    ack = service.ingest(_payload())  # must not raise
+
+    assert ack.accepted is True

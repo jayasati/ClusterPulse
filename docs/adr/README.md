@@ -45,7 +45,7 @@ Every ADR follows the same structure (see [`000-template.md`](000-template.md)):
 | [003](003-heartbeat-deadman-switch.md) | Heartbeat / dead-man switch | Accepted |
 | [004](004-agent-buffering.md) | Agent local buffering | Accepted |
 | [005](005-authentication.md) | Authentication | Accepted |
-| [006](006-alert-lifecycle.md) | Alert lifecycle | Proposed (Phase 3/4) |
+| [006](006-alert-lifecycle.md) | Alert lifecycle | Accepted |
 | [007](007-remediation-safety.md) | Remediation safety | Proposed (Phase 5) |
 | [008](008-grafana-vs-custom-ui.md) | Grafana vs. custom UI | Proposed (Phase 6) |
 | [009](009-systemd-service.md) | systemd service packaging | Proposed (Phase 6/7) |

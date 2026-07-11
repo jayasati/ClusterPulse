@@ -21,6 +21,17 @@ class MetricType(str, Enum):
     NETWORK_BYTES_RECV = "network.bytes_recv"
 
 
+class Severity(str, Enum):
+    """How urgently an alert condition demands attention.
+
+    Deferred out of this module until the Rule Engine (Phase 3) had a real
+    consumer for it — see ``shared/architecture.md`` Future Extension Notes.
+    """
+
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
 DEFAULT_DISK_MOUNT_PATH: str = "/"
 
 DEFAULT_COLLECTION_INTERVAL_SECONDS: float = 30.0

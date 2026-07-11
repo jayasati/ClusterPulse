@@ -1,0 +1,35 @@
+{
+  "threshold_rules": [
+    {
+      "metric_type": "cpu.usage_percent",
+      "comparison": "gt",
+      "threshold": 90.0,
+      "severity": "critical",
+      "description": "CPU usage above 90%"
+    },
+    {
+      "metric_type": "memory.usage_percent",
+      "comparison": "gt",
+      "threshold": 90.0,
+      "severity": "critical",
+      "description": "Memory usage above 90%"
+    },
+    {
+      "metric_type": "disk.usage_percent",
+      "comparison": "gt",
+      "threshold": 85.0,
+      "severity": "warning",
+      "description": "Disk usage above 85%"
+    }
+  ],
+  "rate_of_change_rules": [
+    {
+      "metric_type": "cpu.usage_percent",
+      "comparison": "gt",
+      "max_delta": 30.0,
+      "window_seconds": 300.0,
+      "severity": "warning",
+      "description": "CPU usage increased by more than 30 percentage points within 5 minutes"
+    }
+  ]
+}
