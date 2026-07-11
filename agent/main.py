@@ -42,6 +42,7 @@ def build_scheduler(settings: AgentSettings) -> AgentScheduler:
         retry_attempts=settings.http_retry_attempts,
         retry_min_wait_seconds=settings.http_retry_min_wait_seconds,
         retry_max_wait_seconds=settings.http_retry_max_wait_seconds,
+        auth_token=settings.auth_token,
     )
     buffer = FileBuffer(
         path=settings.buffer_path, max_entries=settings.buffer_max_entries

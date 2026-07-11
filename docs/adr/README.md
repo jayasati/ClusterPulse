@@ -42,9 +42,9 @@ Every ADR follows the same structure (see [`000-template.md`](000-template.md)):
 | [000](000-template.md) | Template | — |
 | [001](001-push-vs-pull.md) | Push vs. Pull metrics delivery | Accepted |
 | [002](002-postgresql-choice.md) | PostgreSQL over InfluxDB | Accepted |
-| [003](003-heartbeat-deadman-switch.md) | Heartbeat / dead-man switch | Proposed (Phase 2) |
+| [003](003-heartbeat-deadman-switch.md) | Heartbeat / dead-man switch | Accepted |
 | [004](004-agent-buffering.md) | Agent local buffering | Accepted |
-| [005](005-authentication.md) | Authentication | Proposed (Phase 2) |
+| [005](005-authentication.md) | Authentication | Accepted |
 | [006](006-alert-lifecycle.md) | Alert lifecycle | Proposed (Phase 3/4) |
 | [007](007-remediation-safety.md) | Remediation safety | Proposed (Phase 5) |
 | [008](008-grafana-vs-custom-ui.md) | Grafana vs. custom UI | Proposed (Phase 6) |
@@ -55,6 +55,12 @@ Every ADR follows the same structure (see [`000-template.md`](000-template.md)):
 | [013](013-logging-strategy.md) | Logging strategy | Accepted |
 | [014](014-deployment-strategy.md) | Deployment strategy | Proposed (Phase 7) |
 | [015](015-testing-strategy.md) | Testing strategy | Proposed |
+| [016](016-database-migration-strategy.md) | Database migration strategy | Accepted |
+| [017](017-collector-sync-vs-async-db.md) | Collector sync vs. async DB access | Accepted |
+
+ADRs 016+ were added during Phase 2 for decisions that didn't map to a Phase-0-reserved
+slot — the reserved numbering (000-015) covers what was foreseeable at Phase 0; new
+numbers are appended as later phases surface decisions that weren't anticipated in advance.
 
 See [`docs/architecture/00-project-initialization.md`](../architecture/00-project-initialization.md)
 for the Phase 0 design document these accepted ADRs are drawn from.

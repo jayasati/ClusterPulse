@@ -40,8 +40,12 @@ class HttpTransport:
         retry_attempts: int,
         retry_min_wait_seconds: float,
         retry_max_wait_seconds: float,
+        auth_token: str | None = None,
     ) -> None:
-        self._client = httpx.Client(base_url=base_url, timeout=timeout_seconds)
+        headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
+        self._client = httpx.Client(
+            base_url=base_url, timeout=timeout_seconds, headers=headers
+        )
         self._send_with_retry = retry(
             reraise=True,
             stop=stop_after_attempt(retry_attempts),

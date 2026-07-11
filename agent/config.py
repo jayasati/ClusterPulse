@@ -42,6 +42,11 @@ class AgentSettings(BaseServiceSettings):
     collector_base_url: str = "http://localhost:8000"
     collection_interval_seconds: float = DEFAULT_COLLECTION_INTERVAL_SECONDS
 
+    auth_token: str | None = None
+    """Bearer token sent to the Collector, if configured. See
+    ``docs/adr/005-authentication.md``. ``None`` sends no Authorization
+    header at all — the pre-Phase-2 default behavior, unchanged."""
+
     http_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS
     http_retry_attempts: int = DEFAULT_HTTP_RETRY_ATTEMPTS
     http_retry_min_wait_seconds: float = DEFAULT_HTTP_RETRY_MIN_WAIT_SECONDS

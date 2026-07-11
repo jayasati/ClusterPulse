@@ -91,3 +91,25 @@ def test_send_raises_retryable_on_connect_error() -> None:
 def test_close_releases_the_connection_pool() -> None:
     transport = _transport()
     transport.close()  # must not raise
+
+
+@respx.mock
+def test_send_includes_authorization_header_when_token_configured() -> None:
+    route = respx.post(ENDPOINT).mock(
+        return_value=httpx.Response(200, json=_ack_json())
+    )
+
+    _transport(auth_token="secret-token").send(_payload())
+
+    assert route.calls.last.request.headers["Authorization"] == "Bearer secret-token"
+
+
+@respx.mock
+def test_send_omits_authorization_header_when_no_token_configured() -> None:
+    route = respx.post(ENDPOINT).mock(
+        return_value=httpx.Response(200, json=_ack_json())
+    )
+
+    _transport().send(_payload())
+
+    assert "Authorization" not in route.calls.last.request.headers
