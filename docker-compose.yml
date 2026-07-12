@@ -1,3 +1,5 @@
+# Dev/demo stack: PostgreSQL + Collector + one Agent + Grafana.
+# Production deployments use deploy/systemd/ + deploy/install_*.sh instead.
 services:
   db:
     image: postgres:16
@@ -9,26 +11,54 @@ services:
       - "5432:5432"
     volumes:
       - clusterpulse_pgdata:/var/lib/postgresql/data
+      # Creates the read-only clusterpulse_ro role Grafana connects as.
+      - ./deploy/postgres/init-grafana-reader.sql:/docker-entrypoint-initdb.d/init-grafana-reader.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clusterpulse"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   collector:
     build:
       context: .
       dockerfile: docker/collector.Dockerfile
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+psycopg://clusterpulse:clusterpulse@db:5432/clusterpulse
+      CLUSTERPULSE_COLLECTOR_DATABASE_URL: postgresql+psycopg://clusterpulse:clusterpulse@db:5432/clusterpulse
+      CLUSTERPULSE_COLLECTOR_API_TOKENS: dev-token
+      CLUSTERPULSE_COLLECTOR_RETENTION_ENABLED: "true"
+    ports:
+      - "8000:8000"
 
   agent:
     build:
       context: .
       dockerfile: docker/agent.Dockerfile
     depends_on:
-      - db
+      - collector
     environment:
-      DATABASE_URL: postgresql+psycopg://clusterpulse:clusterpulse@db:5432/clusterpulse
+      CLUSTERPULSE_AGENT_COLLECTOR_BASE_URL: http://collector:8000
+      CLUSTERPULSE_AGENT_AUTH_TOKEN: dev-token
+      CLUSTERPULSE_AGENT_NODE_ID: docker-agent-1
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      # Injected into the provisioned datasource (never hardcoded there).
+      CLUSTERPULSE_GRAFANA_DB_PASSWORD: clusterpulse_ro
     ports:
-      - "8000:8000"
+      - "3000:3000"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
 
 volumes:
   clusterpulse_pgdata:

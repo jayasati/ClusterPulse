@@ -1,8 +1,9 @@
 """SQLAlchemy-backed ``RemediationActionRepository`` implementation."""
 
 from datetime import datetime
+from typing import Any, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -139,6 +140,36 @@ class SqlAlchemyRemediationActionRepository:
         except SQLAlchemyError as exc:
             raise PersistenceError("failed to list remediation actions") from exc
         return [_to_record(row) for row in rows]
+
+    def prune_terminal_before(self, cutoff: datetime, batch_size: int) -> int:
+        """Delete up to ``batch_size`` terminal actions created before ``cutoff``.
+
+        ``DISPATCHED`` rows are excluded regardless of age — an action the
+        Agent never reported back on is unresolved evidence (crash or
+        partition between dispatch and result-report), and the audit log
+        is the only place that records it.
+        """
+        doomed = (
+            select(RemediationActionModel.id)
+            .where(
+                RemediationActionModel.status != RemediationActionStatus.DISPATCHED,
+                RemediationActionModel.created_at < cutoff,
+            )
+            .limit(batch_size)
+        )
+        statement = delete(RemediationActionModel).where(
+            RemediationActionModel.id.in_(doomed)
+        )
+        try:
+            result = cast(CursorResult[Any], self._session.execute(statement))
+            self._session.commit()
+        except SQLAlchemyError as exc:
+            self._session.rollback()
+            raise PersistenceError(
+                "failed to prune remediation actions",
+                context={"cutoff": cutoff.isoformat()},
+            ) from exc
+        return int(result.rowcount)
 
     def _get_or_raise(
         self, action_id: int, error_message: str

@@ -88,6 +88,15 @@ class MetricsRepository(Protocol):
         """
         ...
 
+    def prune_samples_before(self, cutoff: datetime, batch_size: int) -> int:
+        """Delete up to ``batch_size`` samples with ``received_at < cutoff``.
+
+        Returns the number of rows deleted; the retention job calls this in
+        a loop until it returns ``0``, so each call is one bounded
+        transaction rather than a single unbounded delete.
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class AlertRecord:
@@ -175,6 +184,18 @@ class AlertRepository(Protocol):
         """Return every alert, optionally filtered to a single ``status``."""
         ...
 
+    def prune_resolved_before(self, cutoff: datetime, batch_size: int) -> int:
+        """Delete up to ``batch_size`` alerts resolved before ``cutoff``.
+
+        Only ``resolved`` alerts qualify — a firing alert is never pruned,
+        however old. Alerts still referenced by any ``remediation_actions``
+        row are skipped (not errored): the audit row owns the reference,
+        and pruning it first (longer retention window, enforced by
+        ``CollectorSettings``) eventually frees the alert. Returns the
+        number of rows deleted.
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class RemediationActionRecord:
@@ -250,4 +271,16 @@ class RemediationActionRepository(Protocol):
 
     def list_actions(self, node_id: str | None = None) -> list[RemediationActionRecord]:
         """Return every recorded action, optionally filtered to one ``node_id``."""
+        ...
+
+    def prune_terminal_before(self, cutoff: datetime, batch_size: int) -> int:
+        """Delete up to ``batch_size`` terminal actions created before ``cutoff``.
+
+        Only terminal statuses (``EXECUTED``/``FAILED``/
+        ``BLOCKED_BY_SAFETY_LIMIT``) qualify — a row still ``DISPATCHED``
+        is an unresolved question (Agent crash or partition between
+        dispatch and result-report), and deleting it would erase the only
+        evidence that the question exists. Returns the number of rows
+        deleted.
+        """
         ...

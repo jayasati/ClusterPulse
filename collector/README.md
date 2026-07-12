@@ -133,6 +133,17 @@ REMEDIATION_ENABLED` opt-in (also off by default) — see `agent/README.md`. Onl
 `CLEAR_DIRECTORY` have Agent-side executors; `RESTART_SERVICE` is a reserved
 `PlaybookActionType` with no implementation (see `docs/adr/021-remediation-playbook-scope.md`).
 
+## Retention (Phase 6)
+
+Off by default. `CLUSTERPULSE_COLLECTOR_RETENTION_ENABLED=true` starts a background
+scheduler thread (via the app lifespan) that sweeps hourly
+(`RETENTION_INTERVAL_SECONDS`), deleting in bounded batches (`RETENTION_BATCH_SIZE`):
+terminal remediation audit rows older than `REMEDIATION_ACTIONS_RETENTION_DAYS` (90),
+resolved alerts older than `RESOLVED_ALERTS_RETENTION_DAYS` (30, validated `<=` the
+audit window so the `alert_id` FK can never break), then metric samples older than
+`METRICS_RETENTION_DAYS` (7). Firing alerts and `DISPATCHED` audit rows are never
+deleted. See `docs/adr/010-retention-policy.md` and `collector/jobs/`.
+
 ## Module layout
 
 ```
@@ -154,6 +165,9 @@ collector/
 │   ├── enum_column.py                str_enum_column() — stores enum .value, not .name
 │   ├── models/{node,metric_sample,alert,remediation_action}.py
 │   └── migrations/                 Alembic (see docs/adr/016-database-migration-strategy.md)
+├── jobs/
+│   ├── scheduler.py               PeriodicJobScheduler — daemon-thread job loop (lifespan-managed)
+│   └── retention.py                RetentionJob — FK-safe, batch-bounded pruning
 ├── rules/
 │   ├── definitions.py               ComparisonOperator, Threshold/RateOfChange rule models, RulesConfig
 │   ├── loader.py                     load_rules_config()

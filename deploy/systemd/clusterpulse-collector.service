@@ -1,0 +1,23 @@
+[Unit]
+Description=ClusterPulse Collector
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=clusterpulse
+Group=clusterpulse
+WorkingDirectory=/opt/clusterpulse
+EnvironmentFile=/etc/clusterpulse/collector.env
+ExecStart=/opt/clusterpulse/.venv/bin/python -m collector.main
+Restart=on-failure
+RestartSec=5
+# Hardening: the Collector needs the network and its venv - nothing else.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/clusterpulse
+
+[Install]
+WantedBy=multi-user.target

@@ -354,15 +354,29 @@ default `False`. See `docs/adr/007-remediation-safety.md`.
 
 ## Why rule evaluation (and escalation) is ingestion-triggered, not scheduled
 
-No background scheduler runs inside the Collector. Rule evaluation happens synchronously,
-inline with `POST /api/v1/metrics`, immediately after persistence succeeds — and the
-escalation check rides along the same path (folded into the "still breaching, advance"
-step). This avoids adding a scheduler/async-job dependency
-(`docs/adr/017-collector-sync-vs-async-db.md`'s "no complexity without a demonstrated
-need" philosophy applies here too), at the cost of two related, still-open gaps: a node
-that goes completely silent is never re-evaluated (no staleness *alerting*, though
-`is_stale` is computed), and a firing alert on a silent node never escalates either — both
-require the same not-yet-built scheduler (see Future Extension Notes).
+Rule evaluation happens synchronously, inline with `POST /api/v1/metrics`, immediately
+after persistence succeeds — and the escalation check rides along the same path (folded
+into the "still breaching, advance" step). This avoids coupling the alerting hot path to
+a scheduler, at the cost of two related, still-open gaps: a node that goes completely
+silent is never re-evaluated (no staleness *alerting*, though `is_stale` is computed),
+and a firing alert on a silent node never escalates either. Since Phase 6 a background
+scheduler *does* exist (see below) — these gaps are now "job not yet written," no longer
+"no scheduler exists."
+
+## Background jobs: `collector/jobs/` (Phase 6)
+
+`PeriodicJobScheduler` (`jobs/scheduler.py`) is a daemon thread started/stopped by the
+FastAPI lifespan; it wakes on an interval and runs registered jobs sequentially, with
+per-job failure containment (one failing job is logged and retried next tick, never
+kills the loop or starves other jobs). A thread, not asyncio, because the whole
+persistence stack is sync SQLAlchemy (`docs/adr/017-collector-sync-vs-async-db.md`).
+
+`RetentionJob` (`jobs/retention.py`) is the first registered job — opt-in
+(`retention_enabled=false` default), it prunes in FK-safe order (terminal
+`remediation_actions` → resolved unreferenced `alerts` → `metric_samples`) in
+batch-bounded, per-batch-committed DELETEs, so interruption at any point loses nothing.
+Firing alerts and `DISPATCHED` audit rows are never pruned, at any age. See
+`docs/adr/010-retention-policy.md`.
 
 ## Why rules are a JSON config file, not a database
 

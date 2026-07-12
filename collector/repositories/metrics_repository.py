@@ -1,8 +1,9 @@
 """SQLAlchemy-backed ``MetricsRepository`` implementation."""
 
 from datetime import datetime, timedelta
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -77,6 +78,30 @@ class SqlAlchemyMetricsRepository:
                 context={"node_id": node_id, "metric_type": metric_type.value},
             ) from exc
         return _to_record(row) if row is not None else None
+
+    def prune_samples_before(self, cutoff: datetime, batch_size: int) -> int:
+        """Delete up to ``batch_size`` samples with ``received_at < cutoff``.
+
+        The ``IN (SELECT ... LIMIT n)`` shape (rather than one unbounded
+        ``DELETE``) keeps each transaction's lock footprint and WAL volume
+        bounded no matter how large the expired backlog is.
+        """
+        doomed = (
+            select(MetricSampleModel.id)
+            .where(MetricSampleModel.received_at < cutoff)
+            .limit(batch_size)
+        )
+        statement = delete(MetricSampleModel).where(MetricSampleModel.id.in_(doomed))
+        try:
+            result = cast(CursorResult[Any], self._session.execute(statement))
+            self._session.commit()
+        except SQLAlchemyError as exc:
+            self._session.rollback()
+            raise PersistenceError(
+                "failed to prune metric samples",
+                context={"cutoff": cutoff.isoformat()},
+            ) from exc
+        return int(result.rowcount)
 
 
 def _to_record(row: MetricSampleModel) -> MetricSampleRecord:

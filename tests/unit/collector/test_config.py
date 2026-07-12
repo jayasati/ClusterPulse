@@ -120,3 +120,64 @@ def test_negative_max_remediations_per_node_per_hour_is_rejected() -> None:
         CollectorSettings(
             _env_file=None, api_tokens="t", max_remediations_per_node_per_hour=0
         )
+
+
+def test_retention_disabled_by_default() -> None:
+    settings = CollectorSettings(_env_file=None, api_tokens="t")
+    assert settings.retention_enabled is False
+    assert settings.metrics_retention_days >= 1
+    assert settings.resolved_alerts_retention_days >= 1
+    assert settings.remediation_actions_retention_days >= 1
+    assert settings.retention_interval_seconds > 0
+    assert settings.retention_batch_size >= 1
+
+
+def test_zero_retention_days_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        CollectorSettings(_env_file=None, api_tokens="t", metrics_retention_days=0)
+
+
+def test_zero_retention_batch_size_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        CollectorSettings(_env_file=None, api_tokens="t", retention_batch_size=0)
+
+
+def test_zero_retention_interval_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        CollectorSettings(_env_file=None, api_tokens="t", retention_interval_seconds=0)
+
+
+def test_alert_retention_longer_than_remediation_rejected_when_enabled() -> None:
+    """An alert pruned while audit rows still reference it would violate the
+    remediation_actions.alert_id foreign key — refused at startup."""
+    with pytest.raises(ConfigurationError):
+        CollectorSettings(
+            _env_file=None,
+            api_tokens="t",
+            retention_enabled=True,
+            resolved_alerts_retention_days=90,
+            remediation_actions_retention_days=30,
+        )
+
+
+def test_alert_retention_longer_than_remediation_allowed_when_disabled() -> None:
+    """The window ordering only matters once retention can actually delete."""
+    settings = CollectorSettings(
+        _env_file=None,
+        api_tokens="t",
+        retention_enabled=False,
+        resolved_alerts_retention_days=90,
+        remediation_actions_retention_days=30,
+    )
+    assert settings.resolved_alerts_retention_days == 90
+
+
+def test_alert_retention_equal_to_remediation_is_allowed() -> None:
+    settings = CollectorSettings(
+        _env_file=None,
+        api_tokens="t",
+        retention_enabled=True,
+        resolved_alerts_retention_days=30,
+        remediation_actions_retention_days=30,
+    )
+    assert settings.retention_enabled is True

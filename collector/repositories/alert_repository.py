@@ -1,12 +1,14 @@
 """SQLAlchemy-backed ``AlertRepository`` implementation."""
 
 from datetime import datetime
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from collector.db.models.alert import AlertModel
+from collector.db.models.remediation_action import RemediationActionModel
 from collector.db.timeutil import ensure_utc
 from collector.enums import AlertStatus, RuleKind
 from collector.repositories.protocols import AlertRecord
@@ -129,6 +131,39 @@ class SqlAlchemyAlertRepository:
         except SQLAlchemyError as exc:
             raise PersistenceError("failed to list alerts") from exc
         return [_to_record(row) for row in rows]
+
+    def prune_resolved_before(self, cutoff: datetime, batch_size: int) -> int:
+        """Delete up to ``batch_size`` alerts resolved before ``cutoff``.
+
+        Firing alerts never qualify, and alerts still referenced by a
+        ``remediation_actions`` audit row are skipped rather than errored —
+        the audit row's longer retention window (enforced by
+        ``CollectorSettings``) means the reference disappears first, and
+        the alert becomes prunable on a later run.
+        """
+        referenced = select(RemediationActionModel.id).where(
+            RemediationActionModel.alert_id == AlertModel.id
+        )
+        doomed = (
+            select(AlertModel.id)
+            .where(
+                AlertModel.status == AlertStatus.RESOLVED,
+                AlertModel.resolved_at < cutoff,
+                ~referenced.exists(),
+            )
+            .limit(batch_size)
+        )
+        statement = delete(AlertModel).where(AlertModel.id.in_(doomed))
+        try:
+            result = cast(CursorResult[Any], self._session.execute(statement))
+            self._session.commit()
+        except SQLAlchemyError as exc:
+            self._session.rollback()
+            raise PersistenceError(
+                "failed to prune resolved alerts",
+                context={"cutoff": cutoff.isoformat()},
+            ) from exc
+        return int(result.rowcount)
 
     def _get_or_raise(self, alert_id: int, error_message: str) -> AlertModel:
         try:

@@ -1,0 +1,25 @@
+[Unit]
+Description=ClusterPulse Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=clusterpulse
+Group=clusterpulse
+WorkingDirectory=/opt/clusterpulse
+EnvironmentFile=/etc/clusterpulse/agent.env
+ExecStart=/opt/clusterpulse/.venv/bin/python -m agent.main
+Restart=on-failure
+RestartSec=5
+# The Agent runs fully unprivileged (docs/adr/021-remediation-playbook-scope.md).
+# ReadWritePaths must include the buffer directory and any directory named in
+# CLUSTERPULSE_AGENT_REMEDIATION_ALLOWED_DIRECTORIES.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=false
+ReadWritePaths=/opt/clusterpulse /var/lib/clusterpulse
+
+[Install]
+WantedBy=multi-user.target

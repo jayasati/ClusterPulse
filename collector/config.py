@@ -10,8 +10,13 @@ from shared.constants import (
     DEFAULT_ESCALATION_AFTER_SECONDS,
     DEFAULT_HEARTBEAT_STALE_AFTER_SECONDS,
     DEFAULT_MAX_REMEDIATIONS_PER_NODE_PER_HOUR,
+    DEFAULT_METRICS_RETENTION_DAYS,
+    DEFAULT_REMEDIATION_ACTIONS_RETENTION_DAYS,
     DEFAULT_REMEDIATION_AFTER_SECONDS,
     DEFAULT_REMEDIATION_COOLDOWN_SECONDS,
+    DEFAULT_RESOLVED_ALERTS_RETENTION_DAYS,
+    DEFAULT_RETENTION_BATCH_SIZE,
+    DEFAULT_RETENTION_INTERVAL_SECONDS,
 )
 from shared.exceptions import ConfigurationError
 
@@ -96,6 +101,36 @@ class CollectorSettings(BaseServiceSettings):
     """Path to the JSON file mapping ``rule_key`` -> Playbook. See
     ``collector/remediation/default_playbooks.json``."""
 
+    retention_enabled: bool = False
+    """Opt-in switch for the background retention job — off by default,
+    because enabling data deletion is a deliberate operator decision, never
+    an upgrade side effect. See ``docs/adr/010-retention-policy.md``."""
+
+    metrics_retention_days: int = Field(default=DEFAULT_METRICS_RETENTION_DAYS, ge=1)
+    """Metric samples older than this many days are pruned."""
+
+    resolved_alerts_retention_days: int = Field(
+        default=DEFAULT_RESOLVED_ALERTS_RETENTION_DAYS, ge=1
+    )
+    """Alerts *resolved* longer ago than this are pruned. Firing or
+    acknowledged-but-firing alerts are never touched, regardless of age."""
+
+    remediation_actions_retention_days: int = Field(
+        default=DEFAULT_REMEDIATION_ACTIONS_RETENTION_DAYS, ge=1
+    )
+    """Terminal remediation audit rows older than this are pruned. Rows
+    still ``DISPATCHED`` (awaiting an Agent result that may never come) are
+    never pruned — they are unresolved evidence, not clutter."""
+
+    retention_interval_seconds: float = Field(
+        default=DEFAULT_RETENTION_INTERVAL_SECONDS, gt=0
+    )
+    """How often the retention job runs."""
+
+    retention_batch_size: int = Field(default=DEFAULT_RETENTION_BATCH_SIZE, ge=1)
+    """Maximum rows deleted per DELETE statement/transaction. Bounds lock
+    time and transaction size so a large backlog cannot stall ingestion."""
+
     @property
     def token_set(self) -> frozenset[str]:
         """The configured tokens as a set, ignoring blanks and whitespace."""
@@ -124,6 +159,27 @@ class CollectorSettings(BaseServiceSettings):
         if has_token != has_chat_id:
             raise ConfigurationError(
                 "telegram_bot_token and telegram_chat_id must both be set, or neither"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _require_alert_retention_within_remediation_retention(
+        self,
+    ) -> "CollectorSettings":
+        if (
+            self.retention_enabled
+            and self.resolved_alerts_retention_days
+            > self.remediation_actions_retention_days
+        ):
+            raise ConfigurationError(
+                "resolved_alerts_retention_days must be <= "
+                "remediation_actions_retention_days — an alert must never be "
+                "pruned while remediation audit rows still reference it "
+                "(remediation_actions.alert_id is a foreign key)",
+                context={
+                    "resolved_alerts_retention_days": self.resolved_alerts_retention_days,
+                    "remediation_actions_retention_days": self.remediation_actions_retention_days,
+                },
             )
         return self
 

@@ -1,0 +1,22 @@
+# Provisioned PostgreSQL datasource for ClusterPulse.
+# Connects as the read-only clusterpulse_ro role (see
+# deploy/postgres/init-grafana-reader.sql); the password comes from the
+# CLUSTERPULSE_GRAFANA_DB_PASSWORD env var, never from this file.
+apiVersion: 1
+
+datasources:
+  - name: ClusterPulse PostgreSQL
+    uid: clusterpulse-postgres
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: db:5432
+    database: clusterpulse
+    user: clusterpulse_ro
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    secureJsonData:
+      password: $CLUSTERPULSE_GRAFANA_DB_PASSWORD
+    isDefault: true
+    editable: false

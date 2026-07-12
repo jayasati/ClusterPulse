@@ -47,9 +47,9 @@ Every ADR follows the same structure (see [`000-template.md`](000-template.md)):
 | [005](005-authentication.md) | Authentication | Accepted |
 | [006](006-alert-lifecycle.md) | Alert lifecycle | Accepted |
 | [007](007-remediation-safety.md) | Remediation safety | Accepted |
-| [008](008-grafana-vs-custom-ui.md) | Grafana vs. custom UI | Proposed (Phase 6) |
-| [009](009-systemd-service.md) | systemd service packaging | Proposed (Phase 6/7) |
-| [010](010-retention-policy.md) | Retention policy | Proposed (Phase 6) |
+| [008](008-grafana-vs-custom-ui.md) | Grafana vs. custom UI | Accepted |
+| [009](009-systemd-service.md) | systemd service packaging | Accepted |
+| [010](010-retention-policy.md) | Retention policy | Accepted |
 | [011](011-http-vs-message-queue.md) | HTTP vs. message queue | Accepted |
 | [012](012-python-tech-stack.md) | Python tech stack | Accepted |
 | [013](013-logging-strategy.md) | Logging strategy | Accepted |

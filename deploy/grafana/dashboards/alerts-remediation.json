@@ -1,0 +1,95 @@
+{
+  "uid": "clusterpulse-alerts",
+  "title": "ClusterPulse - Alerts & Remediation",
+  "tags": ["clusterpulse"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-7d", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Firing",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "clusterpulse-postgres" },
+      "targets": [
+        { "refId": "A", "format": "table", "rawSql": "SELECT count(*) FROM alerts WHERE status = 'firing';" }
+      ],
+      "fieldConfig": {
+        "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Unacknowledged & Firing",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "clusterpulse-postgres" },
+      "targets": [
+        { "refId": "A", "format": "table", "rawSql": "SELECT count(*) FROM alerts WHERE status = 'firing' AND acknowledged_at IS NULL;" }
+      ],
+      "fieldConfig": {
+        "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Escalated (7d)",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "clusterpulse-postgres" },
+      "targets": [
+        { "refId": "A", "format": "table", "rawSql": "SELECT count(*) FROM alerts WHERE escalated_at > now() - interval '7 days';" }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Remediation Outcomes (7d)",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "clusterpulse-postgres" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT status, count(*) FROM remediation_actions WHERE created_at > now() - interval '7 days' GROUP BY status;"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Alerts (latest 100)",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 5 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "clusterpulse-postgres" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT id, node_id, rule_key, severity, status, triggering_value, bound, first_fired_at, resolved_at, acknowledged_by, escalated_at, remediated_at FROM alerts ORDER BY first_fired_at DESC LIMIT 100;"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Remediation Audit Log (latest 100)",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 15 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "clusterpulse-postgres" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT id, node_id, alert_id, rule_key, playbook_name, action_type, status, reason, created_at, completed_at FROM remediation_actions ORDER BY created_at DESC LIMIT 100;"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    }
+  ]
+}

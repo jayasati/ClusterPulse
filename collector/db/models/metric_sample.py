@@ -21,6 +21,8 @@ class MetricSampleModel(Base):
     __tablename__ = "metric_samples"
     __table_args__ = (
         Index("ix_metric_samples_node_id_collected_at", "node_id", "collected_at"),
+        # Retention pruning deletes by received_at cutoff (migration 0005).
+        Index("ix_metric_samples_received_at", "received_at"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
