@@ -21,6 +21,19 @@ docker compose up --build
 The compose stack uses fixed dev credentials (`dev-token`, `clusterpulse`,
 `admin/admin`) on purpose — never reuse it beyond a laptop.
 
+**Gotcha — pre-existing database volume**: PostgreSQL only runs
+`docker-entrypoint-initdb.d` scripts when the data volume is *first*
+created. If a `clusterpulse_pgdata` volume already exists from an earlier
+run, the `clusterpulse_ro` role is never created and every Grafana panel
+shows "No data" (its datasource login fails). Fix without wiping data:
+
+```bash
+docker compose exec -T db psql -U clusterpulse -d clusterpulse \
+  < deploy/postgres/init-grafana-reader.sql
+```
+
+or start truly fresh with `docker compose down -v`.
+
 ## systemd install (production path)
 
 On the Collector host (needs PostgreSQL reachable and `python3.13`):
