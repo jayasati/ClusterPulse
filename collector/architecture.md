@@ -378,6 +378,15 @@ batch-bounded, per-batch-committed DELETEs, so interruption at any point loses n
 Firing alerts and `DISPATCHED` audit rows are never pruned, at any age. See
 `docs/adr/010-retention-policy.md`.
 
+Phase 7 added per-job intervals (`JobSchedule`) and two more opt-in jobs
+(`docs/adr/022-staleness-reconciliation-jobs.md`): `StalenessJob` (`jobs/staleness.py`)
+finally acts on the dead-man switch — a critical `staleness:node_heartbeat` alert opens
+for any node silent past `heartbeat_stale_after_seconds` and resolves on recovery, with a
+first-sweep grace period so a Collector outage doesn't accuse the whole fleet; and
+`ReconciliationJob` (`jobs/reconciliation.py`) marks `DISPATCHED` remediation actions
+older than `remediation_dispatch_timeout_seconds` as `FAILED` (a late Agent result still
+overwrites the timeout verdict — the Agent's observation beats the Collector's inference).
+
 ## Why rules are a JSON config file, not a database
 
 `ROADMAP.md` names "Threshold Rules" and "Rate-of-change Rules," not a rule-management

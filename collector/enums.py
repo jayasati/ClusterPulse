@@ -10,10 +10,17 @@ from enum import Enum
 
 
 class RuleKind(str, Enum):
-    """Which category of rule produced an evaluation result or alert."""
+    """Which category of rule produced an evaluation result or alert.
+
+    ``STALENESS`` alerts are not produced by the config-file rule engine —
+    they come from the background ``StalenessJob`` (the dead-man switch of
+    ``docs/adr/003-heartbeat-deadman-switch.md``, finally acted upon), and
+    use the reserved ``staleness:`` rule_key namespace.
+    """
 
     THRESHOLD = "threshold"
     RATE_OF_CHANGE = "rate_of_change"
+    STALENESS = "staleness"
 
 
 class AlertStatus(str, Enum):

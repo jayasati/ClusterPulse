@@ -11,12 +11,15 @@ from shared.constants import (
     DEFAULT_HEARTBEAT_STALE_AFTER_SECONDS,
     DEFAULT_MAX_REMEDIATIONS_PER_NODE_PER_HOUR,
     DEFAULT_METRICS_RETENTION_DAYS,
+    DEFAULT_RECONCILIATION_INTERVAL_SECONDS,
     DEFAULT_REMEDIATION_ACTIONS_RETENTION_DAYS,
     DEFAULT_REMEDIATION_AFTER_SECONDS,
     DEFAULT_REMEDIATION_COOLDOWN_SECONDS,
+    DEFAULT_REMEDIATION_DISPATCH_TIMEOUT_SECONDS,
     DEFAULT_RESOLVED_ALERTS_RETENTION_DAYS,
     DEFAULT_RETENTION_BATCH_SIZE,
     DEFAULT_RETENTION_INTERVAL_SECONDS,
+    DEFAULT_STALENESS_CHECK_INTERVAL_SECONDS,
 )
 from shared.exceptions import ConfigurationError
 
@@ -130,6 +133,32 @@ class CollectorSettings(BaseServiceSettings):
     retention_batch_size: int = Field(default=DEFAULT_RETENTION_BATCH_SIZE, ge=1)
     """Maximum rows deleted per DELETE statement/transaction. Bounds lock
     time and transaction size so a large backlog cannot stall ingestion."""
+
+    staleness_alerting_enabled: bool = False
+    """Opt-in switch for the staleness dead-man-switch job — opens a
+    critical alert for any node silent past ``heartbeat_stale_after_seconds``
+    and resolves it on recovery. See
+    ``docs/adr/022-staleness-reconciliation-jobs.md``."""
+
+    staleness_check_interval_seconds: float = Field(
+        default=DEFAULT_STALENESS_CHECK_INTERVAL_SECONDS, gt=0
+    )
+    """How often the staleness job sweeps the node registry."""
+
+    remediation_reconciliation_enabled: bool = False
+    """Opt-in switch for the job that times out ``DISPATCHED`` remediation
+    actions whose Agent never reported a result."""
+
+    reconciliation_interval_seconds: float = Field(
+        default=DEFAULT_RECONCILIATION_INTERVAL_SECONDS, gt=0
+    )
+    """How often the reconciliation job sweeps for unanswered dispatches."""
+
+    remediation_dispatch_timeout_seconds: float = Field(
+        default=DEFAULT_REMEDIATION_DISPATCH_TIMEOUT_SECONDS, gt=0
+    )
+    """How long a ``DISPATCHED`` action may wait for its result before the
+    reconciliation job marks it ``FAILED`` (timed out)."""
 
     @property
     def token_set(self) -> frozenset[str]:

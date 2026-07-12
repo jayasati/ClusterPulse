@@ -61,6 +61,7 @@ Every ADR follows the same structure (see [`000-template.md`](000-template.md)):
 | [019](019-alert-acknowledgement-escalation.md) | Alert acknowledgement and escalation | Accepted |
 | [020](020-remediation-dispatch-mechanism.md) | Remediation dispatch mechanism | Accepted |
 | [021](021-remediation-playbook-scope.md) | Remediation Playbook scope (Phase 5) | Accepted |
+| [022](022-staleness-reconciliation-jobs.md) | Staleness alerting + remediation reconciliation jobs | Accepted |
 
 ADRs 016+ were added during Phase 2+ for decisions that didn't map to a Phase-0-reserved
 slot — the reserved numbering (000-015) covers what was foreseeable at Phase 0; new

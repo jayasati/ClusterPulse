@@ -18,7 +18,13 @@ from collector.api.routes import (
 )
 from collector.config import CollectorSettings
 from collector.db.session import create_session_factory
-from collector.jobs import PeriodicJobScheduler, RetentionJob
+from collector.jobs import (
+    JobSchedule,
+    PeriodicJobScheduler,
+    ReconciliationJob,
+    RetentionJob,
+    StalenessJob,
+)
 from collector.notifications.protocols import Notifier
 from collector.notifications.telegram import TelegramNotifier
 from collector.remediation.loader import load_remediation_policy
@@ -48,15 +54,41 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def _build_job_scheduler(
-    settings: CollectorSettings, session_factory: sessionmaker[Session]
+    settings: CollectorSettings,
+    session_factory: sessionmaker[Session],
+    notifier: Notifier | None,
 ) -> PeriodicJobScheduler | None:
-    """Build the scheduler with the retention job, or ``None`` if disabled."""
-    if not settings.retention_enabled:
+    """Build the scheduler with every enabled job, or ``None`` if none are.
+
+    Each job is opt-in and runs on its own interval; a deployment that
+    enables nothing gets no background thread at all — exactly the
+    pre-Phase-6 behavior.
+    """
+    schedules: list[JobSchedule] = []
+    if settings.retention_enabled:
+        schedules.append(
+            JobSchedule(
+                RetentionJob(session_factory, settings),
+                settings.retention_interval_seconds,
+            )
+        )
+    if settings.staleness_alerting_enabled:
+        schedules.append(
+            JobSchedule(
+                StalenessJob(session_factory, settings, notifier),
+                settings.staleness_check_interval_seconds,
+            )
+        )
+    if settings.remediation_reconciliation_enabled:
+        schedules.append(
+            JobSchedule(
+                ReconciliationJob(session_factory, settings),
+                settings.reconciliation_interval_seconds,
+            )
+        )
+    if not schedules:
         return None
-    retention_job = RetentionJob(session_factory, settings)
-    return PeriodicJobScheduler(
-        interval_seconds=settings.retention_interval_seconds, jobs=[retention_job]
-    )
+    return PeriodicJobScheduler(schedules)
 
 
 def _build_notifier(settings: CollectorSettings) -> Notifier | None:
@@ -84,12 +116,14 @@ def create_app(settings: CollectorSettings | None = None) -> FastAPI:
     app = FastAPI(title="ClusterPulse Collector", lifespan=_lifespan)
     app.state.settings = settings
     app.state.session_factory = create_session_factory(settings.database_url)
-    app.state.job_scheduler = _build_job_scheduler(settings, app.state.session_factory)
+    app.state.notifier = _build_notifier(settings)
+    app.state.job_scheduler = _build_job_scheduler(
+        settings, app.state.session_factory, app.state.notifier
+    )
     app.state.rules_config = load_rules_config(settings.rules_config_path)
     app.state.remediation_policy = load_remediation_policy(
         settings.remediation_policy_config_path
     )
-    app.state.notifier = _build_notifier(settings)
 
     register_exception_handlers(app)
     app.include_router(metrics.router)

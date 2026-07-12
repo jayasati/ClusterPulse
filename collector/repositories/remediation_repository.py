@@ -141,6 +141,21 @@ class SqlAlchemyRemediationActionRepository:
             raise PersistenceError("failed to list remediation actions") from exc
         return [_to_record(row) for row in rows]
 
+    def list_dispatched_before(self, cutoff: datetime) -> list[RemediationActionRecord]:
+        """Return every ``DISPATCHED`` action created before ``cutoff``."""
+        statement = select(RemediationActionModel).where(
+            RemediationActionModel.status == RemediationActionStatus.DISPATCHED,
+            RemediationActionModel.created_at < cutoff,
+        )
+        try:
+            rows = self._session.scalars(statement).all()
+        except SQLAlchemyError as exc:
+            raise PersistenceError(
+                "failed to list stale dispatched remediation actions",
+                context={"cutoff": cutoff.isoformat()},
+            ) from exc
+        return [_to_record(row) for row in rows]
+
     def prune_terminal_before(self, cutoff: datetime, batch_size: int) -> int:
         """Delete up to ``batch_size`` terminal actions created before ``cutoff``.
 

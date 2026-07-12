@@ -181,3 +181,26 @@ def test_alert_retention_equal_to_remediation_is_allowed() -> None:
         remediation_actions_retention_days=30,
     )
     assert settings.retention_enabled is True
+
+
+def test_staleness_and_reconciliation_disabled_by_default() -> None:
+    settings = CollectorSettings(_env_file=None, api_tokens="t")
+    assert settings.staleness_alerting_enabled is False
+    assert settings.remediation_reconciliation_enabled is False
+    assert settings.staleness_check_interval_seconds > 0
+    assert settings.reconciliation_interval_seconds > 0
+    assert settings.remediation_dispatch_timeout_seconds > 0
+
+
+def test_zero_staleness_interval_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        CollectorSettings(
+            _env_file=None, api_tokens="t", staleness_check_interval_seconds=0
+        )
+
+
+def test_zero_dispatch_timeout_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        CollectorSettings(
+            _env_file=None, api_tokens="t", remediation_dispatch_timeout_seconds=0
+        )

@@ -273,6 +273,14 @@ class RemediationActionRepository(Protocol):
         """Return every recorded action, optionally filtered to one ``node_id``."""
         ...
 
+    def list_dispatched_before(self, cutoff: datetime) -> list[RemediationActionRecord]:
+        """Return every ``DISPATCHED`` action created before ``cutoff``.
+
+        Used by the reconciliation job (``collector/jobs/reconciliation.py``)
+        to find dispatches whose Agent never reported a result.
+        """
+        ...
+
     def prune_terminal_before(self, cutoff: datetime, batch_size: int) -> int:
         """Delete up to ``batch_size`` terminal actions created before ``cutoff``.
 

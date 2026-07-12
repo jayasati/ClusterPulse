@@ -166,8 +166,10 @@ collector/
 │   ├── models/{node,metric_sample,alert,remediation_action}.py
 │   └── migrations/                 Alembic (see docs/adr/016-database-migration-strategy.md)
 ├── jobs/
-│   ├── scheduler.py               PeriodicJobScheduler — daemon-thread job loop (lifespan-managed)
-│   └── retention.py                RetentionJob — FK-safe, batch-bounded pruning
+│   ├── scheduler.py               PeriodicJobScheduler — daemon-thread job loop, per-job intervals
+│   ├── retention.py                RetentionJob — FK-safe, batch-bounded pruning
+│   ├── staleness.py                 StalenessJob — dead-man-switch alerts for silent nodes
+│   └── reconciliation.py             ReconciliationJob — times out unanswered DISPATCHED actions
 ├── rules/
 │   ├── definitions.py               ComparisonOperator, Threshold/RateOfChange rule models, RulesConfig
 │   ├── loader.py                     load_rules_config()

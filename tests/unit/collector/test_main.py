@@ -33,6 +33,22 @@ def test_no_job_scheduler_when_retention_disabled(collector_settings) -> None:
     assert app.state.job_scheduler is None
 
 
+def test_scheduler_built_when_any_job_enabled(tmp_path) -> None:
+    """Staleness alerting alone (retention off) must still get a scheduler."""
+    settings = CollectorSettings(
+        _env_file=None,
+        api_tokens="t",
+        database_url=f"sqlite:///{tmp_path / 'staleness_only.db'}",
+        staleness_alerting_enabled=True,
+        staleness_check_interval_seconds=3600,
+    )
+    app = create_app(settings=settings)
+    try:
+        assert app.state.job_scheduler is not None
+    finally:
+        app.state.session_factory.kw["bind"].dispose()
+
+
 def test_lifespan_starts_and_stops_scheduler_when_retention_enabled(tmp_path) -> None:
     settings = CollectorSettings(
         _env_file=None,
