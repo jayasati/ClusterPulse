@@ -29,3 +29,16 @@ def test_auth_token_env_override(monkeypatch) -> None:
     monkeypatch.setenv("CLUSTERPULSE_AGENT_AUTH_TOKEN", "secret-token")
     settings = AgentSettings()
     assert settings.auth_token == "secret-token"
+
+
+def test_remediation_disabled_by_default() -> None:
+    settings = AgentSettings(_env_file=None)
+    assert settings.remediation_enabled is False
+    assert settings.remediation_allowed_directory_set == frozenset()
+
+
+def test_remediation_allowed_directory_set_parses_comma_separated_paths() -> None:
+    settings = AgentSettings(
+        _env_file=None, remediation_allowed_directories="/tmp/a, /tmp/b ,, /tmp/c"
+    )
+    assert settings.remediation_allowed_directory_set == {"/tmp/a", "/tmp/b", "/tmp/c"}

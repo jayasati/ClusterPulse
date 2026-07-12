@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from collector.repositories.protocols import NodeRecord
+from collector.services.alerting import EvaluationOutcome
 from collector.services.metrics_ingestion import MetricsIngestionService
 from collector.services.node_registry import NodeRegistryService
 from shared.constants import MetricType
@@ -124,7 +125,7 @@ def test_ingest_invokes_alert_evaluation_when_provided() -> None:
     class _FakeAlertEvaluation:
         def evaluate_and_apply(self, node_id, samples, collected_at):
             calls.append((node_id, samples, collected_at))
-            return []
+            return EvaluationOutcome(transitions=[], dispatched_actions=[])
 
     service = MetricsIngestionService(
         _MetricsRepo(), NodeRegistryService(_NodeRepo()), _FakeAlertEvaluation()

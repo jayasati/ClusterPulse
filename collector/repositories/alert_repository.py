@@ -103,6 +103,12 @@ class SqlAlchemyAlertRepository:
         row.escalated_at = escalated_at
         return self._commit_and_return(row, alert_id, "failed to escalate alert")
 
+    def mark_remediated(self, alert_id: int, remediated_at: datetime) -> AlertRecord:
+        """Mark an alert as having had a remediation decision made for it."""
+        row = self._get_or_raise(alert_id, "failed to mark alert remediated")
+        row.remediated_at = remediated_at
+        return self._commit_and_return(row, alert_id, "failed to mark alert remediated")
+
     def get(self, alert_id: int) -> AlertRecord | None:
         """Return the alert with ``alert_id``, or ``None`` if unknown."""
         try:
@@ -172,5 +178,8 @@ def _to_record(row: AlertModel) -> AlertRecord:
         acknowledged_by=row.acknowledged_by,
         escalated_at=(
             ensure_utc(row.escalated_at) if row.escalated_at is not None else None
+        ),
+        remediated_at=(
+            ensure_utc(row.remediated_at) if row.remediated_at is not None else None
         ),
     )

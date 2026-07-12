@@ -5,7 +5,17 @@ from datetime import datetime, timezone
 from agent.scheduler import AgentScheduler
 from shared.constants import MetricType
 from shared.contracts.v1.metrics import Ack, MetricSample, NodeMetricsPayload
-from shared.exceptions import FatalTransportError, RetryableTransportError
+from shared.contracts.v1.remediation import (
+    ActionResult,
+    ActionResultStatus,
+    PendingAction,
+    PlaybookActionType,
+)
+from shared.exceptions import (
+    FatalTransportError,
+    RetryableTransportError,
+    TransportError,
+)
 
 
 class _FakeCollector:
@@ -22,9 +32,11 @@ class _FakeCollector:
 class _RecordingTransport:
     """A fake Transport whose ``send`` succeeds, or raises the next queued outcome."""
 
-    def __init__(self, outcomes=None) -> None:
+    def __init__(self, outcomes=None, ack=None) -> None:
         self._outcomes = list(outcomes or [])
+        self._ack = ack
         self.sent_payloads: list[NodeMetricsPayload] = []
+        self.reported_results: list[tuple[int, ActionResult]] = []
 
     def send(self, payload: NodeMetricsPayload) -> Ack:
         self.sent_payloads.append(payload)
@@ -32,7 +44,12 @@ class _RecordingTransport:
             outcome = self._outcomes.pop(0)
             if isinstance(outcome, Exception):
                 raise outcome
+        if self._ack is not None:
+            return self._ack
         return Ack(accepted=True, received_at=datetime.now(timezone.utc))
+
+    def report_action_result(self, action_id: int, result: ActionResult) -> None:
+        self.reported_results.append((action_id, result))
 
 
 class _InMemoryBuffer:
@@ -56,13 +73,16 @@ def _sample() -> MetricSample:
     )
 
 
-def _scheduler(collectors=None, transport=None, buffer=None) -> AgentScheduler:
+def _scheduler(
+    collectors=None, transport=None, buffer=None, executor=None
+) -> AgentScheduler:
     return AgentScheduler(
         node_id="n1",
         collectors=collectors if collectors is not None else [],
         transport=transport if transport is not None else _RecordingTransport(),
         buffer=buffer if buffer is not None else _InMemoryBuffer(),
         interval_seconds=1.0,
+        executor=executor,
     )
 
 
@@ -187,3 +207,107 @@ def test_run_forever_stops_when_flag_set(monkeypatch) -> None:
     scheduler.run_forever(should_stop)
 
     assert sleep_calls["count"] == 2
+
+
+# --- Remediation: executing pending actions from the Ack -------------------
+
+
+class _FakeExecutor:
+    def __init__(self, result=None) -> None:
+        self._result = result or ActionResult(status=ActionResultStatus.EXECUTED)
+        self.executed: list[PendingAction] = []
+
+    def execute(self, action: PendingAction) -> ActionResult:
+        self.executed.append(action)
+        return self._result
+
+
+def _pending_action(action_id: int = 1) -> PendingAction:
+    return PendingAction(
+        action_id=action_id,
+        action_type=PlaybookActionType.NOOP,
+        parameters={},
+    )
+
+
+def test_pending_actions_are_executed_and_results_reported() -> None:
+    ack = Ack(
+        accepted=True,
+        received_at=datetime.now(timezone.utc),
+        pending_actions=[_pending_action(1)],
+    )
+    transport = _RecordingTransport(ack=ack)
+    executor = _FakeExecutor(result=ActionResult(status=ActionResultStatus.EXECUTED))
+    scheduler = _scheduler(
+        collectors=[_FakeCollector(samples=[_sample()])],
+        transport=transport,
+        executor=executor,
+    )
+
+    scheduler.run_once()
+
+    assert len(executor.executed) == 1
+    assert executor.executed[0].action_id == 1
+    assert transport.reported_results == [
+        (1, ActionResult(status=ActionResultStatus.EXECUTED))
+    ]
+
+
+def test_no_executor_means_pending_actions_are_ignored() -> None:
+    ack = Ack(
+        accepted=True,
+        received_at=datetime.now(timezone.utc),
+        pending_actions=[_pending_action(1)],
+    )
+    transport = _RecordingTransport(ack=ack)
+    scheduler = _scheduler(
+        collectors=[_FakeCollector(samples=[_sample()])],
+        transport=transport,
+        executor=None,
+    )
+
+    scheduler.run_once()  # must not raise despite no executor configured
+
+    assert transport.reported_results == []
+
+
+def test_multiple_pending_actions_are_all_executed_independently() -> None:
+    ack = Ack(
+        accepted=True,
+        received_at=datetime.now(timezone.utc),
+        pending_actions=[_pending_action(1), _pending_action(2)],
+    )
+    transport = _RecordingTransport(ack=ack)
+    executor = _FakeExecutor()
+    scheduler = _scheduler(
+        collectors=[_FakeCollector(samples=[_sample()])],
+        transport=transport,
+        executor=executor,
+    )
+
+    scheduler.run_once()
+
+    assert len(executor.executed) == 2
+    assert {r[0] for r in transport.reported_results} == {1, 2}
+
+
+def test_result_report_failure_is_logged_and_does_not_raise(monkeypatch) -> None:
+    ack = Ack(
+        accepted=True,
+        received_at=datetime.now(timezone.utc),
+        pending_actions=[_pending_action(1)],
+    )
+    transport = _RecordingTransport(ack=ack)
+    monkeypatch.setattr(
+        transport,
+        "report_action_result",
+        lambda *a, **k: (_ for _ in ()).throw(TransportError("network blip")),
+    )
+    executor = _FakeExecutor()
+    scheduler = _scheduler(
+        collectors=[_FakeCollector(samples=[_sample()])],
+        transport=transport,
+        executor=executor,
+    )
+
+    scheduler.run_once()  # must not raise

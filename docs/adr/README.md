@@ -46,7 +46,7 @@ Every ADR follows the same structure (see [`000-template.md`](000-template.md)):
 | [004](004-agent-buffering.md) | Agent local buffering | Accepted |
 | [005](005-authentication.md) | Authentication | Accepted |
 | [006](006-alert-lifecycle.md) | Alert lifecycle | Accepted |
-| [007](007-remediation-safety.md) | Remediation safety | Proposed (Phase 5) |
+| [007](007-remediation-safety.md) | Remediation safety | Accepted |
 | [008](008-grafana-vs-custom-ui.md) | Grafana vs. custom UI | Proposed (Phase 6) |
 | [009](009-systemd-service.md) | systemd service packaging | Proposed (Phase 6/7) |
 | [010](010-retention-policy.md) | Retention policy | Proposed (Phase 6) |
@@ -59,6 +59,8 @@ Every ADR follows the same structure (see [`000-template.md`](000-template.md)):
 | [017](017-collector-sync-vs-async-db.md) | Collector sync vs. async DB access | Accepted |
 | [018](018-telegram-notifications.md) | Telegram notifications | Accepted |
 | [019](019-alert-acknowledgement-escalation.md) | Alert acknowledgement and escalation | Accepted |
+| [020](020-remediation-dispatch-mechanism.md) | Remediation dispatch mechanism | Accepted |
+| [021](021-remediation-playbook-scope.md) | Remediation Playbook scope (Phase 5) | Accepted |
 
 ADRs 016+ were added during Phase 2+ for decisions that didn't map to a Phase-0-reserved
 slot — the reserved numbering (000-015) covers what was foreseeable at Phase 0; new

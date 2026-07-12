@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 
 from collector.config import CollectorSettings
 from collector.notifications.protocols import Notifier
+from collector.remediation.definitions import RemediationPolicy
+from collector.remediation.engine import RemediationEngine
 from collector.repositories.alert_repository import SqlAlchemyAlertRepository
 from collector.repositories.metrics_repository import SqlAlchemyMetricsRepository
 from collector.repositories.node_repository import SqlAlchemyNodeRepository
@@ -22,12 +24,17 @@ from collector.repositories.protocols import (
     AlertRepository,
     MetricsRepository,
     NodeRepository,
+    RemediationActionRepository,
+)
+from collector.repositories.remediation_repository import (
+    SqlAlchemyRemediationActionRepository,
 )
 from collector.rules.definitions import RulesConfig
 from collector.rules.engine import RuleEngine
 from collector.services.alerting import AlertEvaluationService
 from collector.services.metrics_ingestion import MetricsIngestionService
 from collector.services.node_registry import NodeRegistryService
+from collector.services.remediation import RemediationActionService
 from shared.exceptions import AuthenticationError
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -43,6 +50,12 @@ def get_rules_config(request: Request) -> RulesConfig:
     """Return the ``RulesConfig`` loaded once at app startup."""
     rules_config: RulesConfig = request.app.state.rules_config
     return rules_config
+
+
+def get_remediation_policy(request: Request) -> RemediationPolicy:
+    """Return the ``RemediationPolicy`` loaded once at app startup."""
+    remediation_policy: RemediationPolicy = request.app.state.remediation_policy
+    return remediation_policy
 
 
 def get_notifier(request: Request) -> Notifier | None:
@@ -96,6 +109,13 @@ def get_alert_repository(session: Session = Depends(get_db_session)) -> AlertRep
     return SqlAlchemyAlertRepository(session)
 
 
+def get_remediation_action_repository(
+    session: Session = Depends(get_db_session),
+) -> RemediationActionRepository:
+    """Provide a ``RemediationActionRepository`` bound to the request's DB session."""
+    return SqlAlchemyRemediationActionRepository(session)
+
+
 def get_node_registry_service(
     repository: NodeRepository = Depends(get_node_repository),
     settings: CollectorSettings = Depends(get_settings),
@@ -114,11 +134,29 @@ def get_rule_engine(
     return RuleEngine(rules_config, metrics_repository)
 
 
+def get_remediation_engine(
+    remediation_policy: RemediationPolicy = Depends(get_remediation_policy),
+    action_repository: RemediationActionRepository = Depends(
+        get_remediation_action_repository
+    ),
+    settings: CollectorSettings = Depends(get_settings),
+) -> RemediationEngine:
+    """Provide a ``RemediationEngine`` wired to the loaded policy and Safety Limits."""
+    return RemediationEngine(
+        remediation_policy,
+        action_repository,
+        enabled=settings.remediation_enabled,
+        max_actions_per_node_per_hour=settings.max_remediations_per_node_per_hour,
+        cooldown_seconds=settings.remediation_cooldown_seconds,
+    )
+
+
 def get_alert_evaluation_service(
     rule_engine: RuleEngine = Depends(get_rule_engine),
     alert_repository: AlertRepository = Depends(get_alert_repository),
     notifier: Notifier | None = Depends(get_notifier),
     settings: CollectorSettings = Depends(get_settings),
+    remediation_engine: RemediationEngine = Depends(get_remediation_engine),
 ) -> AlertEvaluationService:
     """Provide an ``AlertEvaluationService`` wired to its dependencies."""
     return AlertEvaluationService(
@@ -126,7 +164,18 @@ def get_alert_evaluation_service(
         alert_repository,
         notifier=notifier,
         escalation_after_seconds=settings.escalation_after_seconds,
+        remediation_engine=remediation_engine,
+        remediation_after_seconds=settings.remediation_after_seconds,
     )
+
+
+def get_remediation_action_service(
+    repository: RemediationActionRepository = Depends(
+        get_remediation_action_repository
+    ),
+) -> RemediationActionService:
+    """Provide a ``RemediationActionService`` bound to the request's repository."""
+    return RemediationActionService(repository)
 
 
 def get_metrics_ingestion_service(

@@ -2,8 +2,10 @@
 
 The ClusterPulse Agent runs on every monitored Linux node. It collects local health
 metrics (CPU, memory, disk, network) via `psutil` and pushes them to the Collector over
-HTTP (`docs/adr/001-push-vs-pull.md`). See `architecture.md` in this directory for the
-full design, sequence diagram, and class diagram.
+HTTP (`docs/adr/001-push-vs-pull.md`). Since Phase 5, it can also execute a small, fixed
+catalog of remediation actions the Collector dispatches — disabled by default, gated by
+its own independent opt-in (`docs/adr/007-remediation-safety.md`). See `architecture.md`
+in this directory for the full design, sequence diagram, and class diagram.
 
 ## Running
 
@@ -28,11 +30,31 @@ file (see `shared/config/base.py` / `agent/config.py`):
 | `CLUSTERPULSE_AGENT_HTTP_RETRY_ATTEMPTS` | `3` | Bounded retry attempts for retryable failures |
 | `CLUSTERPULSE_AGENT_BUFFER_PATH` | `./agent_buffer.jsonl` | Local durable buffer file |
 | `CLUSTERPULSE_AGENT_BUFFER_MAX_ENTRIES` | `1000` | Buffer capacity before oldest-first eviction |
+| `CLUSTERPULSE_AGENT_REMEDIATION_ENABLED` | `false` | Independent opt-in to actually execute dispatched Playbooks — see `docs/adr/007-remediation-safety.md` |
+| `CLUSTERPULSE_AGENT_REMEDIATION_ALLOWED_DIRECTORIES` | `""` | Comma-separated absolute paths this Agent may clear for `CLEAR_DIRECTORY` — checked independently of the Collector's Playbook config |
 | `ENVIRONMENT` | `dev` | `dev` \| `staging` \| `prod` — controls log rendering |
 | `LOG_LEVEL` | `INFO` | Log level |
 
 Invalid or missing required configuration fails process startup immediately (before any
 collector, transport, or buffer is constructed) — see `docs/architecture/00-project-initialization.md` §4.
+
+## Remediation
+
+Disabled by default. When the Collector dispatches a Playbook, it rides the `Ack`
+response to this Agent's own metrics push (`Ack.pending_actions`) — no separate poll (see
+`docs/adr/020-remediation-dispatch-mechanism.md`). `AgentScheduler` then executes each
+action via `PlaybookExecutor` **only if** `REMEDIATION_ENABLED=true` here — a second,
+independent opt-in from the Collector's own, so a compromised or misconfigured Collector
+cannot unilaterally cause execution. Only `NOOP` (no-op, always succeeds) and
+`CLEAR_DIRECTORY` (deletes a directory's contents, not the directory itself) have
+executors; `RESTART_SERVICE` is refused as unsupported (`docs/adr/021-remediation-playbook-scope.md`).
+
+`CLEAR_DIRECTORY` additionally checks the dispatched path against
+`REMEDIATION_ALLOWED_DIRECTORIES` — a path outside this Agent's own allowlist is refused
+and reported `FAILED`, regardless of what the Collector's Playbook config said to
+dispatch. After executing (or refusing), the Agent reports the result immediately via
+`POST /api/v1/remediation-actions/{id}/result`; a failed report is logged and dropped, not
+retried or buffered.
 
 ## Module layout
 
@@ -45,13 +67,20 @@ agent/
 │   ├── memory.py
 │   ├── disk.py
 │   └── network.py
-├── scheduler.py              AgentScheduler — sequential collection/delivery cycles
+├── remediation/
+│   ├── executor.py            PlaybookExecutor — dispatches to action handlers, never raises
+│   └── actions/
+│       ├── noop.py              execute_noop()
+│       └── clear_directory.py   execute_clear_directory() — allowlist-checked
+├── scheduler.py              AgentScheduler — sequential collection/delivery cycles,
+│                               executes pending_actions from the current cycle's Ack
 ├── buffer.py                 FileBuffer — durable local buffer for undelivered payloads
 └── transport/
-    └── http_client.py        HttpTransport — push metrics to the Collector over HTTP
+    └── http_client.py        HttpTransport — push metrics + report remediation results
 ```
 
 ## Future extension notes
 
-See `architecture.md` §Future Extension Notes for what Phase 2+ is expected to add here
-(authentication headers, multi-mount disk collection, async scheduling).
+See `architecture.md` §Future Extension Notes for what later phases are expected to add
+(authentication headers, multi-mount disk collection, async scheduling, a privileged
+`RESTART_SERVICE` executor, retry/buffering for failed result reports).

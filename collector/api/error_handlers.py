@@ -13,6 +13,8 @@ from collector.exceptions import (
     AlertAlreadyResolvedError,
     AlertNotFoundError,
     NodeNotFoundError,
+    RemediationActionNotDispatchedError,
+    RemediationActionNotFoundError,
 )
 from shared.constants import HTTP_SERVER_ERROR_THRESHOLD
 from shared.exceptions import AuthenticationError, ClusterPulseError, PersistenceError
@@ -24,9 +26,13 @@ def _status_for(exc: ClusterPulseError) -> int:
     """Map an exception instance to its HTTP status code, by hierarchy."""
     if isinstance(exc, AuthenticationError):
         return status.HTTP_401_UNAUTHORIZED
-    if isinstance(exc, (NodeNotFoundError, AlertNotFoundError)):
+    if isinstance(
+        exc, (NodeNotFoundError, AlertNotFoundError, RemediationActionNotFoundError)
+    ):
         return status.HTTP_404_NOT_FOUND
-    if isinstance(exc, AlertAlreadyResolvedError):
+    if isinstance(
+        exc, (AlertAlreadyResolvedError, RemediationActionNotDispatchedError)
+    ):
         return status.HTTP_409_CONFLICT
     if isinstance(exc, PersistenceError):
         return status.HTTP_503_SERVICE_UNAVAILABLE

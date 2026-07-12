@@ -9,10 +9,12 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from collector.enums import AlertStatus, RuleKind
+from collector.enums import AlertStatus, RemediationActionStatus, RuleKind
+from collector.repositories.protocols import RemediationActionRecord
 from collector.services.alerting import AlertView
 from collector.services.node_registry import NodeView
 from shared.constants import Severity
+from shared.contracts.v1.remediation import PlaybookActionType
 
 
 class NodeRead(BaseModel):
@@ -52,6 +54,7 @@ class AlertRead(BaseModel):
     acknowledged_at: datetime | None
     acknowledged_by: str | None
     escalated_at: datetime | None
+    remediated_at: datetime | None
 
     @classmethod
     def from_view(cls, view: AlertView) -> "AlertRead":
@@ -72,6 +75,7 @@ class AlertRead(BaseModel):
             acknowledged_at=view.acknowledged_at,
             acknowledged_by=view.acknowledged_by,
             escalated_at=view.escalated_at,
+            remediated_at=view.remediated_at,
         )
 
 
@@ -79,3 +83,36 @@ class AcknowledgeRequest(BaseModel):
     """Request body for ``POST /api/v1/alerts/{id}/acknowledge``."""
 
     acknowledged_by: str
+
+
+class RemediationActionRead(BaseModel):
+    """A single remediation decision, as returned by the read API."""
+
+    id: int
+    node_id: str
+    alert_id: int
+    rule_key: str
+    playbook_name: str
+    action_type: PlaybookActionType
+    parameters: dict[str, str]
+    status: RemediationActionStatus
+    reason: str | None
+    created_at: datetime
+    completed_at: datetime | None
+
+    @classmethod
+    def from_record(cls, record: RemediationActionRecord) -> "RemediationActionRead":
+        """Build a ``RemediationActionRead`` from a repository-level record."""
+        return cls(
+            id=record.id,
+            node_id=record.node_id,
+            alert_id=record.alert_id,
+            rule_key=record.rule_key,
+            playbook_name=record.playbook_name,
+            action_type=record.action_type,
+            parameters=record.parameters,
+            status=record.status,
+            reason=record.reason,
+            created_at=record.created_at,
+            completed_at=record.completed_at,
+        )

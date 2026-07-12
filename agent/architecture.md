@@ -2,7 +2,9 @@
 
 Related: `docs/architecture/00-project-initialization.md` (project-wide design),
 `docs/adr/001-push-vs-pull.md`, `docs/adr/004-agent-buffering.md`,
-`docs/adr/011-http-vs-message-queue.md`, `docs/adr/012-python-tech-stack.md`.
+`docs/adr/011-http-vs-message-queue.md`, `docs/adr/012-python-tech-stack.md`,
+`docs/adr/007-remediation-safety.md`, `docs/adr/020-remediation-dispatch-mechanism.md`,
+`docs/adr/021-remediation-playbook-scope.md`.
 
 ## Overview
 
@@ -31,6 +33,7 @@ classDiagram
         -transport: Transport
         -buffer: MetricsBuffer
         -interval_seconds: float
+        -executor: PlaybookExecutor
         +run_once()
         +run_forever(should_stop)
     }
@@ -47,11 +50,18 @@ classDiagram
     class Transport {
         <<Protocol>>
         +send(payload) Ack
+        +report_action_result(action_id, result)
     }
     class HttpTransport {
         -client: httpx.Client
         +send(payload) Ack
+        +report_action_result(action_id, result)
         +close()
+    }
+
+    class PlaybookExecutor {
+        -allowed_directories: frozenset~str~
+        +execute(action) ActionResult
     }
 
     class MetricsBuffer {
@@ -74,6 +84,7 @@ classDiagram
     AgentScheduler --> MetricCollector : uses
     AgentScheduler --> Transport : uses
     AgentScheduler --> MetricsBuffer : uses
+    AgentScheduler --> PlaybookExecutor : uses (optional — None unless remediation_enabled)
     AgentSettings --> AgentScheduler : configures (via agent.main.build_scheduler)
 ```
 
@@ -117,7 +128,7 @@ sequenceDiagram
     S->>T: send(payload)
     T->>Col: POST /api/v1/metrics
     alt 2xx
-        Col-->>T: Ack
+        Col-->>T: Ack(pending_actions=[...])
         T-->>S: Ack
     else 5xx / timeout / connection error
         Note over T: RetryableTransportError, retried with bounded backoff
@@ -128,7 +139,24 @@ sequenceDiagram
         T-->>S: raises
         Note over S: logged, dropped (not buffered)
     end
+
+    opt Ack carried pending_actions and executor is configured
+        loop each PendingAction
+            S->>Executor: execute(action)
+            Executor-->>S: ActionResult (EXECUTED or FAILED, never raises)
+            S->>T: report_action_result(action_id, result)
+            alt report fails (TransportError)
+                T-->>S: raises
+                Note over S: logged, dropped — not retried/buffered
+            end
+        end
+    end
 ```
+
+Pending actions are only executed for the *current* cycle's fresh delivery (the `send`
+call in this diagram) — not for the buffered-payload redelivery loop above it, whose
+`Ack` responses are received but not inspected for `pending_actions`. See
+`docs/adr/020-remediation-dispatch-mechanism.md`.
 
 ## Design rationale (why sequential, not async)
 
@@ -164,3 +192,12 @@ malformed-payload rejection (4xx) is dropped rather than retried forever.
   generated-and-persisted UUID is the likely successor.
 - **Heartbeat**: Phase 2's dead-man-switch design may add a lightweight heartbeat-only
   push (distinct from a full metrics payload) on a separate, shorter interval.
+- **A privileged `RESTART_SERVICE` executor** (Phase 5): needs its own privilege model
+  (root, scoped sudoers/polkit, or a privileged helper process) — see
+  `docs/adr/021-remediation-playbook-scope.md`. `PlaybookExecutor` is already structured
+  so a new `agent/remediation/actions/` handler is additive, not a redesign.
+- **Retry/buffering for failed remediation result reports** (Phase 5): currently logged
+  and dropped on failure, unlike metrics payloads which buffer via `FileBuffer`.
+- **Executing pending actions from buffered/redelivered payloads** (Phase 5): currently
+  only the current cycle's fresh delivery triggers execution — a deliberate scope
+  boundary for this phase, not a hard architectural limit.

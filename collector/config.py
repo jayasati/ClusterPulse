@@ -9,11 +9,17 @@ from shared.config.base import BaseServiceSettings
 from shared.constants import (
     DEFAULT_ESCALATION_AFTER_SECONDS,
     DEFAULT_HEARTBEAT_STALE_AFTER_SECONDS,
+    DEFAULT_MAX_REMEDIATIONS_PER_NODE_PER_HOUR,
+    DEFAULT_REMEDIATION_AFTER_SECONDS,
+    DEFAULT_REMEDIATION_COOLDOWN_SECONDS,
 )
 from shared.exceptions import ConfigurationError
 
 _DEFAULT_RULES_CONFIG_PATH = str(
     Path(__file__).resolve().parent / "rules" / "default_rules.json"
+)
+_DEFAULT_REMEDIATION_POLICY_PATH = str(
+    Path(__file__).resolve().parent / "remediation" / "default_playbooks.json"
 )
 
 
@@ -59,6 +65,37 @@ class CollectorSettings(BaseServiceSettings):
     """Seconds a firing, unacknowledged alert waits before a single escalation
     notification. See ``docs/adr/019-alert-acknowledgement-escalation.md``."""
 
+    remediation_enabled: bool = False
+    """Global kill switch for auto-remediation — off by default. See
+    ``docs/adr/007-remediation-safety.md``. Dispatching also requires the
+    Agent's own independent ``remediation_enabled`` opt-in; both must be
+    true for a Playbook to actually execute."""
+
+    remediation_after_seconds: float = Field(
+        default=DEFAULT_REMEDIATION_AFTER_SECONDS, ge=0
+    )
+    """Seconds a firing, unacknowledged alert waits before remediation is
+    considered — always evaluated at the same "has this escalated" moment
+    as ``escalation_after_seconds``, so this must be >= it (a human gets a
+    chance to intervene before automation does)."""
+
+    max_remediations_per_node_per_hour: int = Field(
+        default=DEFAULT_MAX_REMEDIATIONS_PER_NODE_PER_HOUR, ge=1
+    )
+    """Safety Limit: caps how many remediation actions may be dispatched to a
+    single node within a rolling hour, regardless of how many distinct
+    alerts escalate on it."""
+
+    remediation_cooldown_seconds: float = Field(
+        default=DEFAULT_REMEDIATION_COOLDOWN_SECONDS, ge=0
+    )
+    """Safety Limit: minimum time since the last dispatched/blocked action for
+    the same ``(node_id, playbook_name)`` before another may be dispatched."""
+
+    remediation_policy_config_path: str = _DEFAULT_REMEDIATION_POLICY_PATH
+    """Path to the JSON file mapping ``rule_key`` -> Playbook. See
+    ``collector/remediation/default_playbooks.json``."""
+
     @property
     def token_set(self) -> frozenset[str]:
         """The configured tokens as a set, ignoring blanks and whitespace."""
@@ -87,5 +124,22 @@ class CollectorSettings(BaseServiceSettings):
         if has_token != has_chat_id:
             raise ConfigurationError(
                 "telegram_bot_token and telegram_chat_id must both be set, or neither"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _require_remediation_after_escalation(self) -> "CollectorSettings":
+        if (
+            self.remediation_enabled
+            and self.remediation_after_seconds < self.escalation_after_seconds
+        ):
+            raise ConfigurationError(
+                "remediation_after_seconds must be >= escalation_after_seconds "
+                "— remediation must never fire before a human has had a chance "
+                "to acknowledge",
+                context={
+                    "remediation_after_seconds": self.remediation_after_seconds,
+                    "escalation_after_seconds": self.escalation_after_seconds,
+                },
             )
         return self

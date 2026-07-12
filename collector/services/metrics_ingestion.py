@@ -8,6 +8,7 @@ from collector.repositories.protocols import MetricsRepository
 from collector.services.alerting import AlertEvaluationService
 from collector.services.node_registry import NodeRegistryService
 from shared.contracts.v1.metrics import Ack, NodeMetricsPayload
+from shared.contracts.v1.remediation import PendingAction
 
 logger = structlog.get_logger(__name__)
 
@@ -36,7 +37,9 @@ class MetricsIngestionService:
         Rule evaluation is best-effort: a failure there is logged and
         swallowed, never surfaced as a failed ingestion — the Agent's
         retry/buffer behavior must not be triggered by a Rule Engine bug
-        when the metrics themselves were persisted successfully.
+        when the metrics themselves were persisted successfully. Any
+        remediation actions dispatched during evaluation ride this same
+        ``Ack`` — see ``docs/adr/007-remediation-safety.md``.
         """
         received_at = datetime.now(timezone.utc)
         self._node_registry.record_seen(payload.node_id, seen_at=payload.collected_at)
@@ -46,14 +49,18 @@ class MetricsIngestionService:
             collected_at=payload.collected_at,
             received_at=received_at,
         )
-        self._evaluate_rules_best_effort(payload)
-        return Ack(accepted=True, received_at=received_at)
+        pending_actions = self._evaluate_rules_best_effort(payload)
+        return Ack(
+            accepted=True, received_at=received_at, pending_actions=pending_actions
+        )
 
-    def _evaluate_rules_best_effort(self, payload: NodeMetricsPayload) -> None:
+    def _evaluate_rules_best_effort(
+        self, payload: NodeMetricsPayload
+    ) -> list[PendingAction]:
         if self._alert_evaluation is None:
-            return
+            return []
         try:
-            self._alert_evaluation.evaluate_and_apply(
+            outcome = self._alert_evaluation.evaluate_and_apply(
                 payload.node_id, payload.samples, payload.collected_at
             )
         except (
@@ -62,3 +69,12 @@ class MetricsIngestionService:
             logger.error(
                 "rule_evaluation_failed", node_id=payload.node_id, error=str(exc)
             )
+            return []
+        return [
+            PendingAction(
+                action_id=action.id,
+                action_type=action.action_type,
+                parameters=action.parameters,
+            )
+            for action in outcome.dispatched_actions
+        ]

@@ -16,6 +16,7 @@ from collector.db.base import Base
 from collector.db.models import alert  # noqa: F401 - registers model on Base
 from collector.db.models import metric_sample  # noqa: F401 - registers model on Base
 from collector.db.models import node  # noqa: F401 - registers model on Base
+from collector.db.models import remediation_action  # noqa: F401 - registers model
 
 config = context.config
 if config.config_file_name is not None:

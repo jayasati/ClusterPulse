@@ -12,6 +12,7 @@ from agent.collectors.disk import DiskCollector
 from agent.collectors.memory import MemoryCollector
 from agent.collectors.network import NetworkCollector
 from agent.config import AgentSettings
+from agent.remediation.executor import PlaybookExecutor
 from agent.scheduler import AgentScheduler
 from agent.transport.http_client import HttpTransport
 from shared.exceptions import ConfigurationError
@@ -53,12 +54,18 @@ def build_scheduler(settings: AgentSettings) -> AgentScheduler:
         DiskCollector(),
         NetworkCollector(),
     ]
+    executor = (
+        PlaybookExecutor(settings.remediation_allowed_directory_set)
+        if settings.remediation_enabled
+        else None
+    )
     return AgentScheduler(
         node_id=settings.node_id,
         collectors=collectors,
         transport=transport,
         buffer=buffer,
         interval_seconds=settings.collection_interval_seconds,
+        executor=executor,
     )
 
 

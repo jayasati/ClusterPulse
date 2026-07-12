@@ -4,7 +4,9 @@ Related: `docs/architecture/00-project-initialization.md` (project-wide design),
 `docs/adr/002-postgresql-choice.md`, `docs/adr/003-heartbeat-deadman-switch.md`,
 `docs/adr/005-authentication.md`, `docs/adr/006-alert-lifecycle.md`,
 `docs/adr/016-database-migration-strategy.md`, `docs/adr/017-collector-sync-vs-async-db.md`,
-`docs/adr/018-telegram-notifications.md`, `docs/adr/019-alert-acknowledgement-escalation.md`.
+`docs/adr/018-telegram-notifications.md`, `docs/adr/019-alert-acknowledgement-escalation.md`,
+`docs/adr/007-remediation-safety.md`, `docs/adr/020-remediation-dispatch-mechanism.md`,
+`docs/adr/021-remediation-playbook-scope.md`.
 
 ## Overview
 
@@ -94,10 +96,16 @@ classDiagram
         -alert_repository: AlertRepository
         -notifier: Notifier
         -escalation_after_seconds: float
-        +evaluate_and_apply(node_id, samples, collected_at) list~AlertView~
+        -remediation_engine: RemediationEngine
+        -remediation_after_seconds: float
+        +evaluate_and_apply(node_id, samples, collected_at) EvaluationOutcome
         +acknowledge(alert_id, acknowledged_by) AlertView
         +get_alert(alert_id) AlertView
         +list_alerts(status) list~AlertView~
+    }
+    class EvaluationOutcome {
+        +transitions: list~AlertView~
+        +dispatched_actions: list~RemediationActionRecord~
     }
     class MetricsIngestionService {
         -metrics_repository: MetricsRepository
@@ -110,9 +118,43 @@ classDiagram
     AlertEvaluationService --> RuleEngine : depends on (concrete)
     AlertEvaluationService --> AlertRepository : depends on (Protocol)
     AlertEvaluationService --> Notifier : depends on (Protocol, optional)
+    AlertEvaluationService --> RemediationEngine : depends on (concrete, optional)
+    AlertEvaluationService --> EvaluationOutcome : returns
     MetricsIngestionService --> MetricsRepository : depends on (Protocol)
     MetricsIngestionService --> NodeRegistryService : depends on (concrete)
     MetricsIngestionService --> AlertEvaluationService : depends on (concrete, optional)
+
+    class RemediationPolicy {
+        +playbooks: list~PlaybookDefinition~
+    }
+    class RemediationEngine {
+        -action_repository: RemediationActionRepository
+        -enabled: bool
+        -max_actions_per_node_per_hour: int
+        -cooldown_seconds: float
+        +decide(node_id, alert_id, rule_key, now) RemediationActionRecord
+    }
+    class RemediationActionRepository {
+        <<Protocol>>
+        +create_action(...) RemediationActionRecord
+        +mark_result(action_id, status, reason, completed_at) RemediationActionRecord
+        +count_recent_actions(node_id, since) int
+        +find_last_action(node_id, playbook_name) RemediationActionRecord
+        +get(action_id) RemediationActionRecord
+        +list_actions(node_id) list~RemediationActionRecord~
+    }
+    class SqlAlchemyRemediationActionRepository
+    class RemediationActionService {
+        -repository: RemediationActionRepository
+        +get_action(action_id) RemediationActionRecord
+        +list_actions(node_id) list~RemediationActionRecord~
+        +report_result(action_id, result) RemediationActionRecord
+    }
+
+    RemediationEngine --> RemediationPolicy : configured from
+    RemediationEngine --> RemediationActionRepository : depends on (Protocol)
+    RemediationActionRepository <|.. SqlAlchemyRemediationActionRepository
+    RemediationActionService --> RemediationActionRepository : depends on (Protocol)
 
     class AlertModel {
         +id: int
@@ -125,9 +167,27 @@ classDiagram
         +acknowledged_at: datetime
         +acknowledged_by: str
         +escalated_at: datetime
+        +remediated_at: datetime
     }
     SqlAlchemyAlertRepository --> AlertModel : maps
     AlertModel --> NodeModel : FK node_id
+
+    class RemediationActionModel {
+        +id: int
+        +node_id: str
+        +alert_id: int
+        +rule_key: str
+        +playbook_name: str
+        +action_type: PlaybookActionType
+        +parameters: dict
+        +status: RemediationActionStatus
+        +reason: str
+        +created_at: datetime
+        +completed_at: datetime
+    }
+    SqlAlchemyRemediationActionRepository --> RemediationActionModel : maps
+    RemediationActionModel --> NodeModel : FK node_id
+    RemediationActionModel --> AlertModel : FK alert_id
 ```
 
 `NodeView`/`AlertView` (plain dataclasses returned by services) are distinct from
@@ -246,6 +306,52 @@ attribute (`acknowledged_at`/`acknowledged_by`), not a third status value. An al
 `firing` *and* acknowledged simultaneously; only the rule no longer breaching resolves it.
 See `docs/adr/019-alert-acknowledgement-escalation.md`.
 
+## Sequence diagram — remediation dispatch and result reporting
+
+```mermaid
+sequenceDiagram
+    participant AlertSvc as AlertEvaluationService
+    participant RemEng as RemediationEngine
+    participant RemRepo as RemediationActionRepository
+    participant Route as metrics.receive_metrics
+    participant Agent
+    participant Executor as PlaybookExecutor (Agent)
+    participant ResultRoute as remediation_actions.report_result
+
+    Note over AlertSvc: alert just escalated, or advanced past<br/>remediation_after_seconds, not yet remediated
+    AlertSvc->>RemEng: decide(node_id, alert_id, rule_key, now)
+    alt no Playbook mapped, or remediation disabled
+        RemEng-->>AlertSvc: None
+        Note over AlertSvc: one-shot NOT consumed — a later Playbook still gets a chance
+    else Playbook mapped
+        RemEng->>RemRepo: find_last_action / count_recent_actions
+        alt Safety Limit blocks (rate limit or cooldown)
+            RemEng->>RemRepo: create_action(status=BLOCKED_BY_SAFETY_LIMIT)
+            RemEng-->>AlertSvc: RemediationActionRecord (blocked)
+        else allowed
+            RemEng->>RemRepo: create_action(status=DISPATCHED)
+            RemEng-->>AlertSvc: RemediationActionRecord (dispatched)
+        end
+        Note over AlertSvc: mark_remediated(alert_id) — one-shot now consumed
+    end
+    AlertSvc-->>Route: EvaluationOutcome(transitions, dispatched_actions)
+    Route-->>Agent: 200 Ack(pending_actions=[PendingAction(...)])
+    Note over Agent: same response to the request Agent itself sent — no new channel
+    Agent->>Executor: execute(action)
+    alt action_type unsupported, or CLEAR_DIRECTORY path not in Agent's own allowlist
+        Executor-->>Agent: ActionResult(status=FAILED)
+    else executed
+        Executor-->>Agent: ActionResult(status=EXECUTED)
+    end
+    Agent->>ResultRoute: POST /api/v1/remediation-actions/{id}/result
+    ResultRoute->>RemRepo: mark_result(action_id, status, reason, completed_at)
+```
+
+Two independent opt-ins gate this entire flow: the Collector only calls `RemediationEngine
+.decide` with `enabled=True` (its own `remediation_enabled`), and the Agent only
+constructs a `PlaybookExecutor` at all when *its own* `remediation_enabled` is true — both
+default `False`. See `docs/adr/007-remediation-safety.md`.
+
 ## Why rule evaluation (and escalation) is ingestion-triggered, not scheduled
 
 No background scheduler runs inside the Collector. Rule evaluation happens synchronously,
@@ -328,6 +434,13 @@ firing. Simplest correct behavior for "Alert Lifecycle" as literally named in
 root cause as the identity-spoofing limitation above; solved together once per-node/
 per-user credentials exist.
 
+## Known limitation: no reconciliation for a stuck-`DISPATCHED` remediation action
+
+If the Agent crashes, or a network partition drops the result-report request, an action
+recorded `DISPATCHED` stays there forever — no timeout, no re-dispatch. Same root cause as
+the "no Collector-side scheduler" gap already documented above for staleness-alerting and
+escalation; see `docs/adr/007-remediation-safety.md`.
+
 ## Future Extension Notes
 
 - **Per-node/per-user credentials**: replace the shared-token model once TLS/RBAC land,
@@ -352,3 +465,12 @@ per-user credentials exist.
 - **Rate limiting**: not implemented; noted as a gap if the Collector is ever exposed
   beyond a trusted network, or if a fleet-wide incident opens enough alerts at once to
   approach Telegram's per-chat rate limits.
+- **A privileged `RESTART_SERVICE` executor**: needs its own privilege/deployment-model
+  ADR (root, scoped sudoers/polkit, or a privileged helper process) — deliberately not
+  solved in Phase 5. See `docs/adr/021-remediation-playbook-scope.md`.
+- **Reconciliation for stuck `DISPATCHED` actions**: needs the same not-yet-built
+  Collector-side scheduler as staleness-alerting/escalation — worth solving together.
+- **Retry/buffering for failed remediation result reports**: currently logged and dropped,
+  unlike metrics payloads which buffer on the Agent (`docs/adr/004-agent-buffering.md`).
+- **A manual "trigger this Playbook now" endpoint**: not in `ROADMAP.md`'s Phase 5 scope;
+  a natural follow-up if operators want on-demand remediation, not just automatic.

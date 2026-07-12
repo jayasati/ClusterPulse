@@ -74,3 +74,49 @@ def test_telegram_chat_id_without_bot_token_raises_configuration_error() -> None
 def test_negative_escalation_after_seconds_is_rejected() -> None:
     with pytest.raises(ValidationError):
         CollectorSettings(_env_file=None, api_tokens="t", escalation_after_seconds=-1)
+
+
+def test_remediation_disabled_by_default() -> None:
+    settings = CollectorSettings(_env_file=None, api_tokens="t")
+    assert settings.remediation_enabled is False
+
+
+def test_remediation_after_seconds_below_escalation_rejected_when_enabled() -> None:
+    with pytest.raises(ConfigurationError):
+        CollectorSettings(
+            _env_file=None,
+            api_tokens="t",
+            remediation_enabled=True,
+            escalation_after_seconds=900,
+            remediation_after_seconds=100,
+        )
+
+
+def test_remediation_after_seconds_below_escalation_allowed_when_disabled() -> None:
+    """The ordering only matters once remediation can actually fire."""
+    settings = CollectorSettings(
+        _env_file=None,
+        api_tokens="t",
+        remediation_enabled=False,
+        escalation_after_seconds=900,
+        remediation_after_seconds=100,
+    )
+    assert settings.remediation_after_seconds == 100
+
+
+def test_remediation_after_seconds_equal_to_escalation_is_allowed() -> None:
+    settings = CollectorSettings(
+        _env_file=None,
+        api_tokens="t",
+        remediation_enabled=True,
+        escalation_after_seconds=900,
+        remediation_after_seconds=900,
+    )
+    assert settings.remediation_after_seconds == 900
+
+
+def test_negative_max_remediations_per_node_per_hour_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        CollectorSettings(
+            _env_file=None, api_tokens="t", max_remediations_per_node_per_hour=0
+        )

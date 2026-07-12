@@ -8,10 +8,12 @@ import respx
 
 from agent.transport.http_client import HttpTransport
 from shared.contracts.v1.metrics import NodeMetricsPayload
+from shared.contracts.v1.remediation import ActionResult, ActionResultStatus
 from shared.exceptions import FatalTransportError, RetryableTransportError
 
 BASE_URL = "http://collector.test"
 ENDPOINT = f"{BASE_URL}/api/v1/metrics"
+RESULT_ENDPOINT = f"{BASE_URL}/api/v1/remediation-actions/1/result"
 
 
 def _transport(**overrides) -> HttpTransport:
@@ -113,3 +115,39 @@ def test_send_omits_authorization_header_when_no_token_configured() -> None:
     _transport().send(_payload())
 
     assert "Authorization" not in route.calls.last.request.headers
+
+
+@respx.mock
+def test_report_action_result_success() -> None:
+    route = respx.post(RESULT_ENDPOINT).mock(return_value=httpx.Response(200, json={}))
+
+    _transport().report_action_result(
+        1, ActionResult(status=ActionResultStatus.EXECUTED, message="cleared 3")
+    )
+
+    assert route.call_count == 1
+    assert route.calls.last.request.content
+
+
+@respx.mock
+def test_report_action_result_retries_on_server_error_then_succeeds() -> None:
+    route = respx.post(RESULT_ENDPOINT)
+    route.side_effect = [httpx.Response(503), httpx.Response(200, json={})]
+
+    _transport().report_action_result(
+        1, ActionResult(status=ActionResultStatus.FAILED, message="boom")
+    )
+
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_report_action_result_raises_fatal_on_4xx_without_retry() -> None:
+    route = respx.post(RESULT_ENDPOINT).mock(return_value=httpx.Response(404))
+
+    with pytest.raises(FatalTransportError):
+        _transport().report_action_result(
+            1, ActionResult(status=ActionResultStatus.EXECUTED)
+        )
+
+    assert route.call_count == 1

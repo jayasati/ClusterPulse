@@ -23,6 +23,7 @@ from collector.db.base import Base
 from collector.db.models import alert  # noqa: F401 - register model on Base
 from collector.db.models import metric_sample  # noqa: F401 - register model on Base
 from collector.db.models import node  # noqa: F401 - register model on Base
+from collector.db.models import remediation_action  # noqa: F401 - register model
 from collector.main import create_app
 
 TEST_TOKEN = "test-token"
@@ -100,6 +101,21 @@ def collector_settings_with_telegram(tmp_path):
     )
 
 
+@pytest.fixture
+def collector_settings_with_remediation(tmp_path):
+    """Remediation enabled, with escalation/remediation thresholds at zero so
+    a single still-firing advance (any push after the opening one) both
+    escalates and dispatches — using the shipped default rules/playbooks,
+    where ``threshold:disk.usage_percent`` maps to a real Playbook."""
+    return _build_collector_settings(
+        tmp_path,
+        "collector_test_remediation.db",
+        remediation_enabled=True,
+        escalation_after_seconds=0,
+        remediation_after_seconds=0,
+    )
+
+
 def dispose_app_engine(app) -> None:
     """Dispose the SQLAlchemy engine ``create_app()`` built for ``app``.
 
@@ -123,6 +139,16 @@ def collector_client(collector_settings):
 @pytest.fixture
 def collector_client_with_telegram(collector_settings_with_telegram):
     app = create_app(settings=collector_settings_with_telegram)
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        dispose_app_engine(app)
+
+
+@pytest.fixture
+def collector_client_with_remediation(collector_settings_with_remediation):
+    app = create_app(settings=collector_settings_with_remediation)
     try:
         with TestClient(app) as client:
             yield client

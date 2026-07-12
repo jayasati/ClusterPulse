@@ -16,11 +16,13 @@ from tenacity import (
 
 from shared.constants import HTTP_CLIENT_ERROR_THRESHOLD, HTTP_SERVER_ERROR_THRESHOLD
 from shared.contracts.v1.metrics import Ack, NodeMetricsPayload
+from shared.contracts.v1.remediation import ActionResult
 from shared.exceptions import FatalTransportError, RetryableTransportError
 
 logger = structlog.get_logger(__name__)
 
 _METRICS_ENDPOINT = "/api/v1/metrics"
+_REMEDIATION_ACTIONS_ENDPOINT = "/api/v1/remediation-actions"
 
 
 class HttpTransport:
@@ -46,18 +48,28 @@ class HttpTransport:
         self._client = httpx.Client(
             base_url=base_url, timeout=timeout_seconds, headers=headers
         )
-        self._send_with_retry = retry(
+        retry_policy = retry(
             reraise=True,
             stop=stop_after_attempt(retry_attempts),
             wait=wait_exponential(
                 min=retry_min_wait_seconds, max=retry_max_wait_seconds
             ),
             retry=retry_if_exception_type(RetryableTransportError),
-        )(self._send_once)
+        )
+        self._send_with_retry = retry_policy(self._send_once)
+        self._report_result_with_retry = retry_policy(self._report_action_result_once)
 
     def send(self, payload: NodeMetricsPayload) -> Ack:
         """Send ``payload`` to the Collector, retrying transient failures."""
         return self._send_with_retry(payload)
+
+    def report_action_result(self, action_id: int, result: ActionResult) -> None:
+        """Report a dispatched action's outcome, retrying transient failures.
+
+        Best-effort beyond the retry policy: a caller that still sees a
+        ``TransportError`` after retries logs it and moves on — there is
+        no buffering for action results (unlike metrics payloads)."""
+        self._report_result_with_retry(action_id, result)
 
     def close(self) -> None:
         """Release the underlying HTTP connection pool."""
@@ -65,17 +77,25 @@ class HttpTransport:
 
     def _send_once(self, payload: NodeMetricsPayload) -> Ack:
         """Perform a single HTTP request, classifying failures by type."""
+        response = self._post(_METRICS_ENDPOINT, payload.model_dump(mode="json"))
+        return Ack.model_validate_json(response.text)
+
+    def _report_action_result_once(self, action_id: int, result: ActionResult) -> None:
+        """Perform a single HTTP request reporting one action's result."""
+        endpoint = f"{_REMEDIATION_ACTIONS_ENDPOINT}/{action_id}/result"
+        self._post(endpoint, result.model_dump(mode="json"))
+
+    def _post(self, endpoint: str, json_body: dict[str, object]) -> httpx.Response:
+        """POST ``json_body`` to ``endpoint``, classifying failures by type."""
         try:
-            response = self._client.post(
-                _METRICS_ENDPOINT, json=payload.model_dump(mode="json")
-            )
+            response = self._client.post(endpoint, json=json_body)
         except httpx.TimeoutException as exc:
             raise RetryableTransportError(
-                "collector request timed out", context={"endpoint": _METRICS_ENDPOINT}
+                "collector request timed out", context={"endpoint": endpoint}
             ) from exc
         except httpx.ConnectError as exc:
             raise RetryableTransportError(
-                "collector connection failed", context={"endpoint": _METRICS_ENDPOINT}
+                "collector connection failed", context={"endpoint": endpoint}
             ) from exc
 
         if response.status_code >= HTTP_SERVER_ERROR_THRESHOLD:
@@ -88,4 +108,4 @@ class HttpTransport:
                 "collector rejected the payload",
                 context={"status_code": response.status_code},
             )
-        return Ack.model_validate_json(response.text)
+        return response

@@ -18,10 +18,16 @@ from datetime import datetime, timezone
 
 from sqlalchemy import text
 
+from collector.enums import RemediationActionStatus, RuleKind
+from collector.repositories.alert_repository import SqlAlchemyAlertRepository
 from collector.repositories.metrics_repository import SqlAlchemyMetricsRepository
 from collector.repositories.node_repository import SqlAlchemyNodeRepository
-from shared.constants import MetricType
+from collector.repositories.remediation_repository import (
+    SqlAlchemyRemediationActionRepository,
+)
+from shared.constants import MetricType, Severity
 from shared.contracts.v1.metrics import MetricSample
+from shared.contracts.v1.remediation import PlaybookActionType
 
 
 def test_metric_type_is_stored_as_its_value_not_its_name(db_session) -> None:
@@ -44,3 +50,40 @@ def test_metric_type_is_stored_as_its_value_not_its_name(db_session) -> None:
 
     assert raw_value == "cpu.usage_percent"
     assert raw_value != "CPU_USAGE_PERCENT"
+
+
+def test_remediation_action_type_and_status_are_stored_as_their_values(
+    db_session,
+) -> None:
+    now = datetime.now(timezone.utc)
+    SqlAlchemyNodeRepository(db_session).upsert_seen("node-1", now)
+    alert = SqlAlchemyAlertRepository(db_session).create_alert(
+        node_id="node-1",
+        rule_key="threshold:disk.usage_percent",
+        rule_kind=RuleKind.THRESHOLD,
+        severity=Severity.WARNING,
+        description="disk too full",
+        triggering_value=95.0,
+        bound=85.0,
+        fired_at=now,
+    )
+    SqlAlchemyRemediationActionRepository(db_session).create_action(
+        node_id="node-1",
+        alert_id=alert.id,
+        rule_key="threshold:disk.usage_percent",
+        playbook_name="clear_tmp",
+        action_type=PlaybookActionType.CLEAR_DIRECTORY,
+        parameters={"path": "/tmp/reclaimable"},
+        status=RemediationActionStatus.DISPATCHED,
+        reason=None,
+        created_at=now,
+    )
+
+    row = db_session.execute(
+        text("SELECT action_type, status FROM remediation_actions LIMIT 1")
+    ).one()
+
+    assert row.action_type == "clear_directory"
+    assert row.action_type != "CLEAR_DIRECTORY"
+    assert row.status == "dispatched"
+    assert row.status != "DISPATCHED"

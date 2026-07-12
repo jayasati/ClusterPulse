@@ -42,3 +42,6 @@ class AlertModel(Base):
     escalated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
+    remediated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )

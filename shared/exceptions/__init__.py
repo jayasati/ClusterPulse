@@ -10,6 +10,7 @@ from shared.exceptions.auth import AuthenticationError
 from shared.exceptions.base import ClusterPulseError
 from shared.exceptions.config import ConfigurationError
 from shared.exceptions.persistence import PersistenceError
+from shared.exceptions.remediation import RemediationSafetyError
 from shared.exceptions.transport import (
     FatalTransportError,
     RetryableTransportError,
@@ -21,6 +22,7 @@ __all__ = [
     "ConfigurationError",
     "AuthenticationError",
     "PersistenceError",
+    "RemediationSafetyError",
     "TransportError",
     "RetryableTransportError",
     "FatalTransportError",

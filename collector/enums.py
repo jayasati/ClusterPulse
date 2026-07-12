@@ -21,3 +21,19 @@ class AlertStatus(str, Enum):
 
     FIRING = "firing"
     RESOLVED = "resolved"
+
+
+class RemediationActionStatus(str, Enum):
+    """A remediation action's position in its dispatch/execution lifecycle.
+
+    ``BLOCKED_BY_SAFETY_LIMIT`` is a terminal, expected outcome (rate limit
+    or cooldown said not yet) — not an error. ``DISPATCHED`` means the
+    Collector sent it to the Agent via the next ``Ack`` and is awaiting a
+    result; ``EXECUTED``/``FAILED`` are terminal states the Agent reports
+    back via ``POST /api/v1/remediation-actions/{id}/result``.
+    """
+
+    BLOCKED_BY_SAFETY_LIMIT = "blocked_by_safety_limit"
+    DISPATCHED = "dispatched"
+    EXECUTED = "executed"
+    FAILED = "failed"

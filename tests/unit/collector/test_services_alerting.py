@@ -4,12 +4,13 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from collector.enums import AlertStatus, RuleKind
+from collector.enums import AlertStatus, RemediationActionStatus, RuleKind
 from collector.exceptions import AlertAlreadyResolvedError, AlertNotFoundError
-from collector.repositories.protocols import AlertRecord
+from collector.repositories.protocols import AlertRecord, RemediationActionRecord
 from collector.rules.engine import RuleEvaluationResult
 from collector.services.alerting import AlertEvaluationService
 from shared.constants import Severity
+from shared.contracts.v1.remediation import PlaybookActionType
 
 
 def _now() -> datetime:
@@ -110,6 +111,12 @@ class _FakeAlertRepository:
         self._alerts[alert_id] = updated
         return updated
 
+    def mark_remediated(self, alert_id, remediated_at):
+        record = self._alerts[alert_id]
+        updated = AlertRecord(**{**record.__dict__, "remediated_at": remediated_at})
+        self._alerts[alert_id] = updated
+        return updated
+
     def get(self, alert_id):
         return self._alerts.get(alert_id)
 
@@ -148,7 +155,7 @@ def test_breach_with_no_open_alert_opens_one() -> None:
         _FakeRuleEngine([_result(True)]), _FakeAlertRepository()
     )
 
-    transitions = service.evaluate_and_apply("node-1", [], _now())
+    transitions = service.evaluate_and_apply("node-1", [], _now()).transitions
 
     assert len(transitions) == 1
     assert transitions[0].status == AlertStatus.FIRING
@@ -171,7 +178,7 @@ def test_no_longer_breaching_resolves_open_alert() -> None:
     service.evaluate_and_apply("node-1", [], _now())
 
     rule_engine._results = [_result(False)]
-    transitions = service.evaluate_and_apply("node-1", [], _now())
+    transitions = service.evaluate_and_apply("node-1", [], _now()).transitions
 
     assert transitions[0].status == AlertStatus.RESOLVED
 
@@ -181,7 +188,7 @@ def test_not_breached_with_no_open_alert_produces_no_transition() -> None:
         _FakeRuleEngine([_result(False)]), _FakeAlertRepository()
     )
 
-    transitions = service.evaluate_and_apply("node-1", [], _now())
+    transitions = service.evaluate_and_apply("node-1", [], _now()).transitions
 
     assert transitions == []
 
@@ -311,9 +318,9 @@ def test_works_without_a_notifier() -> None:
         _FakeRuleEngine([_result(True)]), _FakeAlertRepository()
     )
 
-    transitions = service.evaluate_and_apply("node-1", [], _now())  # must not raise
+    outcome = service.evaluate_and_apply("node-1", [], _now())  # must not raise
 
-    assert len(transitions) == 1
+    assert len(outcome.transitions) == 1
 
 
 # --- Escalation ----------------------------------------------------------
@@ -331,7 +338,7 @@ def test_escalation_triggers_after_threshold_and_notifies() -> None:
     service.evaluate_and_apply("node-1", [], start)
 
     later = start + timedelta(seconds=61)
-    view = service.evaluate_and_apply("node-1", [], later)[0]
+    view = service.evaluate_and_apply("node-1", [], later).transitions[0]
 
     assert view.escalated_at is not None
     assert len(notifier.messages) == 2
@@ -350,7 +357,7 @@ def test_escalation_does_not_trigger_before_threshold() -> None:
     service.evaluate_and_apply("node-1", [], start)
 
     soon = start + timedelta(seconds=10)
-    view = service.evaluate_and_apply("node-1", [], soon)[0]
+    view = service.evaluate_and_apply("node-1", [], soon).transitions[0]
 
     assert view.escalated_at is None
     assert len(notifier.messages) == 1
@@ -367,7 +374,7 @@ def test_escalation_skipped_when_acknowledged() -> None:
     service.acknowledge(1, acknowledged_by="alice")
 
     later = start + timedelta(seconds=61)
-    view = service.evaluate_and_apply("node-1", [], later)[0]
+    view = service.evaluate_and_apply("node-1", [], later).transitions[0]
 
     assert view.escalated_at is None
 
@@ -381,9 +388,187 @@ def test_escalation_happens_only_once() -> None:
     start = _now()
     service.evaluate_and_apply("node-1", [], start)
     first_escalation = start + timedelta(seconds=61)
-    first_view = service.evaluate_and_apply("node-1", [], first_escalation)[0]
+    first_view = service.evaluate_and_apply("node-1", [], first_escalation).transitions[
+        0
+    ]
 
     much_later = start + timedelta(seconds=1000)
-    second_view = service.evaluate_and_apply("node-1", [], much_later)[0]
+    second_view = service.evaluate_and_apply("node-1", [], much_later).transitions[0]
 
     assert first_view.escalated_at == second_view.escalated_at
+
+
+# --- Remediation -----------------------------------------------------------
+
+
+class _FakeRemediationEngine:
+    """Returns a queued decision (or ``None``) each call; records every call."""
+
+    def __init__(self, decisions=None) -> None:
+        self._decisions = list(decisions or [])
+        self.calls: list[tuple] = []
+
+    def decide(self, node_id, alert_id, rule_key, now):
+        self.calls.append((node_id, alert_id, rule_key, now))
+        if not self._decisions:
+            return None
+        return self._decisions.pop(0)
+
+
+def _action_record(
+    status: RemediationActionStatus, action_id: int = 1
+) -> RemediationActionRecord:
+    return RemediationActionRecord(
+        id=action_id,
+        node_id="node-1",
+        alert_id=1,
+        rule_key="threshold:cpu.usage_percent",
+        playbook_name="clear_tmp",
+        action_type=PlaybookActionType.CLEAR_DIRECTORY,
+        parameters={"path": "/tmp/reclaimable"},
+        status=status,
+        reason=None,
+        created_at=_now(),
+        completed_at=None,
+    )
+
+
+def test_remediation_dispatched_after_threshold_reached() -> None:
+    engine = _FakeRemediationEngine(
+        decisions=[_action_record(RemediationActionStatus.DISPATCHED)]
+    )
+    service = AlertEvaluationService(
+        _FakeRuleEngine([_result(True)]),
+        _FakeAlertRepository(),
+        remediation_engine=engine,
+        remediation_after_seconds=60,
+    )
+    start = _now()
+    service.evaluate_and_apply("node-1", [], start)
+
+    later = start + timedelta(seconds=61)
+    outcome = service.evaluate_and_apply("node-1", [], later)
+
+    assert len(outcome.dispatched_actions) == 1
+    assert outcome.transitions[0].remediated_at is not None
+    assert len(engine.calls) == 1
+
+
+def test_remediation_not_attempted_before_threshold() -> None:
+    engine = _FakeRemediationEngine(
+        decisions=[_action_record(RemediationActionStatus.DISPATCHED)]
+    )
+    service = AlertEvaluationService(
+        _FakeRuleEngine([_result(True)]),
+        _FakeAlertRepository(),
+        remediation_engine=engine,
+        remediation_after_seconds=600,
+    )
+    start = _now()
+    service.evaluate_and_apply("node-1", [], start)
+
+    soon = start + timedelta(seconds=10)
+    outcome = service.evaluate_and_apply("node-1", [], soon)
+
+    assert outcome.dispatched_actions == []
+    assert outcome.transitions[0].remediated_at is None
+    assert engine.calls == []
+
+
+def test_remediation_skipped_when_acknowledged() -> None:
+    engine = _FakeRemediationEngine(
+        decisions=[_action_record(RemediationActionStatus.DISPATCHED)]
+    )
+    service = AlertEvaluationService(
+        _FakeRuleEngine([_result(True)]),
+        _FakeAlertRepository(),
+        remediation_engine=engine,
+        remediation_after_seconds=60,
+    )
+    start = _now()
+    service.evaluate_and_apply("node-1", [], start)
+    service.acknowledge(1, acknowledged_by="alice")
+
+    later = start + timedelta(seconds=61)
+    outcome = service.evaluate_and_apply("node-1", [], later)
+
+    assert outcome.dispatched_actions == []
+    assert engine.calls == []
+
+
+def test_remediation_attempted_at_most_once_per_alert() -> None:
+    engine = _FakeRemediationEngine(
+        decisions=[_action_record(RemediationActionStatus.DISPATCHED)]
+    )
+    service = AlertEvaluationService(
+        _FakeRuleEngine([_result(True)]),
+        _FakeAlertRepository(),
+        remediation_engine=engine,
+        remediation_after_seconds=60,
+    )
+    start = _now()
+    service.evaluate_and_apply("node-1", [], start)
+    service.evaluate_and_apply("node-1", [], start + timedelta(seconds=61))
+
+    service.evaluate_and_apply("node-1", [], start + timedelta(seconds=1000))
+
+    assert len(engine.calls) == 1
+
+
+def test_blocked_decision_is_not_surfaced_as_a_dispatched_action() -> None:
+    engine = _FakeRemediationEngine(
+        decisions=[_action_record(RemediationActionStatus.BLOCKED_BY_SAFETY_LIMIT)]
+    )
+    service = AlertEvaluationService(
+        _FakeRuleEngine([_result(True)]),
+        _FakeAlertRepository(),
+        remediation_engine=engine,
+        remediation_after_seconds=60,
+    )
+    start = _now()
+    service.evaluate_and_apply("node-1", [], start)
+
+    later = start + timedelta(seconds=61)
+    outcome = service.evaluate_and_apply("node-1", [], later)
+
+    assert outcome.dispatched_actions == []
+    assert outcome.transitions[0].remediated_at is not None  # still one-shot consumed
+
+
+def test_no_decision_does_not_consume_the_one_shot_attempt() -> None:
+    """Engine returning None (disabled, or no Playbook mapped) shouldn't burn
+    the one-shot — a Playbook added later while still firing should still
+    get a chance."""
+    engine = _FakeRemediationEngine(
+        decisions=[None, _action_record(RemediationActionStatus.DISPATCHED)]
+    )
+    service = AlertEvaluationService(
+        _FakeRuleEngine([_result(True)]),
+        _FakeAlertRepository(),
+        remediation_engine=engine,
+        remediation_after_seconds=60,
+    )
+    start = _now()
+    service.evaluate_and_apply("node-1", [], start)
+    first = start + timedelta(seconds=61)
+    first_outcome = service.evaluate_and_apply("node-1", [], first)
+    assert first_outcome.dispatched_actions == []
+    assert first_outcome.transitions[0].remediated_at is None
+
+    second = start + timedelta(seconds=62)
+    second_outcome = service.evaluate_and_apply("node-1", [], second)
+
+    assert len(second_outcome.dispatched_actions) == 1
+    assert second_outcome.transitions[0].remediated_at is not None
+
+
+def test_no_remediation_engine_produces_no_dispatched_actions() -> None:
+    service = AlertEvaluationService(
+        _FakeRuleEngine([_result(True)]),
+        _FakeAlertRepository(),
+        remediation_after_seconds=0,
+    )
+
+    outcome = service.evaluate_and_apply("node-1", [], _now())
+
+    assert outcome.dispatched_actions == []

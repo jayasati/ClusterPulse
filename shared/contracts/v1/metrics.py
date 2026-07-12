@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 from shared.constants import MetricType
+from shared.contracts.v1.remediation import PendingAction
 
 
 class MetricSample(BaseModel):
@@ -32,8 +33,15 @@ class NodeMetricsPayload(BaseModel):
 
 
 class Ack(BaseModel):
-    """The Collector's acknowledgement of a received payload."""
+    """The Collector's acknowledgement of a received payload.
+
+    ``pending_actions`` rides this same response rather than a separate
+    poll — remediation decisions are made synchronously during this same
+    ingestion request, so there is nothing to gain from a second round
+    trip. Defaults to empty, so this is a backward-compatible wire change.
+    """
 
     accepted: bool
     received_at: datetime
     message: str | None = None
+    pending_actions: list[PendingAction] = Field(default_factory=list)

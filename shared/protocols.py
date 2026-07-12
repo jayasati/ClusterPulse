@@ -9,6 +9,7 @@ shared base class.
 from typing import Protocol, runtime_checkable
 
 from shared.contracts.v1.metrics import Ack, MetricSample, NodeMetricsPayload
+from shared.contracts.v1.remediation import ActionResult
 
 
 @runtime_checkable
@@ -26,6 +27,10 @@ class Transport(Protocol):
 
     def send(self, payload: NodeMetricsPayload) -> Ack:
         """Deliver ``payload`` to the Collector and return its acknowledgement."""
+        ...
+
+    def report_action_result(self, action_id: int, result: ActionResult) -> None:
+        """Report the outcome of executing a dispatched remediation action."""
         ...
 
 

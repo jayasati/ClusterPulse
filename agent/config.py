@@ -54,3 +54,25 @@ class AgentSettings(BaseServiceSettings):
 
     buffer_path: str = "./agent_buffer.jsonl"
     buffer_max_entries: int = DEFAULT_BUFFER_MAX_ENTRIES
+
+    remediation_enabled: bool = False
+    """Independent opt-in for actually executing dispatched remediation
+    actions — off by default. Even if the Collector dispatches a Playbook
+    (its own ``remediation_enabled`` opt-in), this Agent refuses to execute
+    it until this is also explicitly enabled. See
+    ``docs/adr/007-remediation-safety.md``."""
+
+    remediation_allowed_directories: str = ""
+    """Comma-separated absolute directory paths this Agent may clear for a
+    ``CLEAR_DIRECTORY`` action. Defense in depth: checked independently of
+    whatever the Collector's Playbook config says — a dispatched path
+    outside this allowlist is refused locally, never executed blindly."""
+
+    @property
+    def remediation_allowed_directory_set(self) -> frozenset[str]:
+        """The configured allowlist as a set, ignoring blanks and whitespace."""
+        return frozenset(
+            path.strip()
+            for path in self.remediation_allowed_directories.split(",")
+            if path.strip()
+        )

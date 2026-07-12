@@ -1,6 +1,7 @@
 """Unit tests verifying concrete Agent classes satisfy the shared Protocols."""
 
 from shared.contracts.v1.metrics import Ack, NodeMetricsPayload
+from shared.contracts.v1.remediation import ActionResult
 from shared.protocols import MetricCollector, MetricsBuffer, Transport
 
 
@@ -11,6 +12,9 @@ class _FakeCollector:
 
 class _FakeTransport:
     def send(self, payload: NodeMetricsPayload) -> Ack:
+        raise NotImplementedError
+
+    def report_action_result(self, action_id: int, result: ActionResult) -> None:
         raise NotImplementedError
 
 

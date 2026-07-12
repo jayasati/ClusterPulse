@@ -5,8 +5,10 @@ from typing import Callable
 
 import structlog
 
+from agent.remediation.executor import PlaybookExecutor
 from shared.constants import DEFAULT_BUFFER_DRAIN_BATCH_SIZE
-from shared.contracts.v1.metrics import NodeMetricsPayload
+from shared.contracts.v1.metrics import Ack, NodeMetricsPayload
+from shared.contracts.v1.remediation import ActionResult
 from shared.exceptions import FatalTransportError, TransportError
 from shared.protocols import MetricCollector, MetricsBuffer, Transport
 
@@ -20,6 +22,14 @@ class AgentScheduler:
     collect fresh samples, attempt delivery, and buffer on retryable
     failure. Cycles never overlap — a slow cycle simply delays the next
     tick, rather than running concurrently with it.
+
+    Phase 5 adds: executing any ``pending_actions`` the Collector attached
+    to this cycle's ``Ack`` and reporting each result back — only for the
+    current cycle's fresh delivery, not for buffered/redelivered payloads
+    (a documented limitation, not an oversight). ``executor`` is ``None``
+    unless this Agent's own ``remediation_enabled`` opt-in is set — the
+    second of the two independent opt-ins gating real execution. See
+    ``docs/adr/007-remediation-safety.md``.
     """
 
     def __init__(
@@ -29,12 +39,14 @@ class AgentScheduler:
         transport: Transport,
         buffer: MetricsBuffer,
         interval_seconds: float,
+        executor: PlaybookExecutor | None = None,
     ) -> None:
         self._node_id = node_id
         self._collectors = collectors
         self._transport = transport
         self._buffer = buffer
         self._interval_seconds = interval_seconds
+        self._executor = executor
 
     def run_once(self) -> None:
         """Execute a single collection-and-delivery cycle."""
@@ -98,11 +110,12 @@ class AgentScheduler:
     def _deliver(self, payload: NodeMetricsPayload) -> None:
         """Send the current cycle's payload, buffering it on retryable failure."""
         try:
-            self._transport.send(payload)
+            ack = self._transport.send(payload)
         except FatalTransportError as exc:
             logger.error(
                 "payload_rejected_dropped", node_id=self._node_id, error=str(exc)
             )
+            return
         except TransportError as exc:
             logger.warning(
                 "payload_delivery_failed_buffering",
@@ -110,3 +123,23 @@ class AgentScheduler:
                 error=str(exc),
             )
             self._buffer.enqueue(payload)
+            return
+        self._execute_pending_actions(ack)
+
+    def _execute_pending_actions(self, ack: Ack) -> None:
+        if self._executor is None:
+            return
+        for action in ack.pending_actions:
+            result = self._executor.execute(action)
+            self._report_action_result(action.action_id, result)
+
+    def _report_action_result(self, action_id: int, result: ActionResult) -> None:
+        try:
+            self._transport.report_action_result(action_id, result)
+        except TransportError as exc:
+            logger.warning(
+                "remediation_result_report_failed",
+                node_id=self._node_id,
+                action_id=action_id,
+                error=str(exc),
+            )

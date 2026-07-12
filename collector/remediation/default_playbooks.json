@@ -1,0 +1,13 @@
+{
+  "playbooks": [
+    {
+      "rule_key": "threshold:disk.usage_percent",
+      "playbook_name": "clear_reclaimable_tmp_directory",
+      "action_type": "clear_directory",
+      "parameters": {
+        "path": "/tmp/clusterpulse-reclaimable"
+      },
+      "description": "Clear a reclaimable temp/cache directory when a disk-usage alert escalates unresolved. Only takes effect once an operator adds this exact path to the Agent's own CLUSTERPULSE_AGENT_REMEDIATION_ALLOWED_DIRECTORIES allowlist - the Agent refuses any path it wasn't independently configured to trust."
+    }
+  ]
+}
